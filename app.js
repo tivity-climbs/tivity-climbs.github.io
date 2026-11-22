@@ -34,8 +34,8 @@ function valid(saved) {
   });
 }
 function save() {
-  try { localStorage.setItem(STORAGE, JSON.stringify(state)); $("#saved").textContent = "SAVED ON THIS DEVICE"; }
-  catch { $("#saved").textContent = "SAVE UNAVAILABLE · KEEP THIS TAB OPEN"; }
+  try { localStorage.setItem(STORAGE, JSON.stringify(state)); }
+  catch { }
 }
 function round() { return state.rounds[current.id]; }
 function item(id) { return current.items.find(i => i.id === id); }
