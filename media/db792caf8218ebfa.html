@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Orbit Courier — gravity slingshot delivery</title>
+<style>
+  :root{
+    --ink:#e8ecf4; --dim:#8b94a8; --accent:#ffc857; --good:#6fe3a5; --bad:#ff6b6b;
+    --panel:rgba(13,17,28,.92); --line:rgba(255,255,255,.14);
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%; overflow:hidden; background:#05070d;}
+  body{font-family:"Avenir Next","Trebuchet MS",Verdana,sans-serif; color:var(--ink);
+       -webkit-user-select:none; user-select:none;}
+  #stage{position:fixed; inset:0; touch-action:none; display:block; cursor:crosshair;}
+
+  /* ---------- overlay screens ---------- */
+  .screen{position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+          background:rgba(4,6,12,.72); backdrop-filter:blur(3px); z-index:10;}
+  .screen.hidden{display:none;}
+  .card{max-width:min(560px,92vw); background:var(--panel); border:1px solid var(--line);
+        border-radius:16px; padding:28px 32px; box-shadow:0 18px 60px rgba(0,0,0,.6);}
+  .card h1{font-size:30px; letter-spacing:.5px; margin-bottom:4px;}
+  .card h1 .em{color:var(--accent);}
+  .tagline{color:var(--dim); font-size:14px; margin-bottom:16px;}
+  .objective{font-size:15px; line-height:1.55; background:rgba(255,200,87,.08);
+             border:1px solid rgba(255,200,87,.3); border-radius:10px; padding:10px 14px; margin-bottom:14px;}
+  .objective b{color:var(--accent);}
+  .controls{font-size:13.5px; line-height:1.7; color:var(--ink); margin-bottom:18px;}
+  .controls .k{display:inline-block; min-width:20px; text-align:center; padding:1px 7px; margin:0 1px;
+               border:1px solid var(--line); border-bottom-width:2px; border-radius:6px;
+               background:rgba(255,255,255,.06); font-size:12px;}
+  .controls .row{display:flex; gap:8px; align-items:baseline; margin:4px 0;}
+  .controls .what{color:var(--dim); min-width:118px;}
+  button{font:inherit; font-weight:600; letter-spacing:.4px; color:#10131b; background:var(--accent);
+         border:none; border-radius:10px; padding:12px 26px; cursor:pointer; font-size:16px;}
+  button:hover{filter:brightness(1.08);}
+  button:active{transform:translateY(1px);}
+  button.ghost{background:transparent; color:var(--ink); border:1px solid var(--line);}
+  .btnrow{display:flex; gap:10px; flex-wrap:wrap;}
+  .bigstat{font-size:52px; font-weight:700; color:var(--accent); margin:6px 0 2px;}
+  .resultline{color:var(--dim); font-size:14px; margin-bottom:18px; line-height:1.6;}
+  #lostTitle{color:var(--bad);}
+  #winTitle{color:var(--good);}
+  .foot{margin-top:14px; font-size:11.5px; color:var(--dim);}
+
+  /* ---------- HUD chrome ---------- */
+  #mute{position:fixed; top:10px; right:12px; z-index:20; font-size:12px; padding:6px 12px;
+        background:rgba(13,17,28,.8); color:var(--ink); border:1px solid var(--line);}
+  #rotateHint{position:fixed; left:0; right:0; bottom:0; z-index:20; text-align:center;
+        font-size:11px; color:var(--dim); padding:4px; background:rgba(5,7,13,.55);}
+</style>
+</head>
+<body>
+<canvas id="stage" aria-label="Orbit Courier game. Fly your ship with gravity assists and deliver packages between moons."></canvas>
+
+<button id="mute" aria-label="Toggle sound">♪ Sound: on</button>
+
+<!-- Title screen -->
+<div class="screen" id="titleScreen">
+  <div class="card">
+    <h1>ORBIT <span class="em">COURIER</span></h1>
+    <div class="tagline">A courier run across the Aurelia system — deliver <b>8</b> packages between the moons.</div>
+    <div class="objective"><b>Mission:</b> fly to the pulsing <b>pickup beacon</b>, grab the package, then
+      deliver it to the <b>target moon</b> marked by the golden arrow. Repeat <b>8 times</b> to win.</div>
+    <div class="objective">Thrust burns <b>fuel</b> — fuel is scarce. Skim the dashed <b>scoop ring</b> around a
+      planet (don't get closer!) to refuel. Plan <b>gravity slingshots</b>: falling toward a body bends your path for free.</div>
+    <div class="controls">
+      <div class="row"><span class="what">Keyboard</span><span><span class="k">←</span><span class="k">→</span> or <span class="k">A</span><span class="k">D</span> turn &nbsp;·&nbsp; <span class="k">↑</span> or <span class="k">W</span> thrust</span></div>
+      <div class="row"><span class="what">Mouse / touch</span><span>press &amp; hold anywhere — the ship flies toward your pointer</span></div>
+      <div class="row"><span class="what">Restart</span><span><span class="k">R</span> at any time</span></div>
+      <div class="row"><span class="what">Crashing</span><span>into a sun, planet or moon ends the run — so does drifting off-map</span></div>
+    </div>
+    <div class="btnrow"><button id="startBtn" aria-label="Start delivering packages">Launch courier ▸</button></div>
+    <div class="foot">Tip: you start already orbiting the sun — small nudges go a long way.</div>
+  </div>
+</div>
+
+<!-- Win screen -->
+<div class="screen hidden" id="winScreen">
+  <div class="card" style="text-align:center">
+    <h1 id="winTitle">ALL PACKAGES DELIVERED</h1>
+    <div class="bigstat" id="winScore">0</div>
+    <div class="resultline" id="winStats"></div>
+    <div class="btnrow" style="justify-content:center"><button id="winRestart" aria-label="Play again">Fly again ▸</button></div>
+  </div>
+</div>
+
+<!-- Lose screen -->
+<div class="screen hidden" id="loseScreen">
+  <div class="card" style="text-align:center">
+    <h1 id="lostTitle">RUN ENDED</h1>
+    <div class="resultline" id="loseReason">—</div>
+    <div class="bigstat" id="loseScore">0</div>
+    <div class="resultline" id="loseStats"></div>
+    <div class="btnrow" style="justify-content:center">
+      <button id="loseRestart" aria-label="Restart run">Retry ▸</button>
+    </div>
+  </div>
+</div>
+
+<div id="rotateHint">← → turn · ↑ thrust · hold mouse/finger to fly toward it · R restart</div>
+
+<script>
+"use strict";
+/* ============================================================
+   ORBIT COURIER — original single-file gravity-courier game.
+   All visuals & sound are generated by code. No external assets.
+   ============================================================ */
+
+// ---------- seeded RNG (deterministic run layout) ----------
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);
+  t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+
+// ---------- constants ----------
+const W=1600, H=900;                 // logical world size (letterboxed to fit)
+const DT=1/120;                      // fixed physics step
+const MAX_CATCHUP=0.25;              // never simulate more than this per frame
+const THRUST=135;                    // px/s^2
+const ROT_SPEED=3.7;                 // rad/s keyboard
+const POINT_TURN=6.5;                // rad/s pointer-steer
+const FUEL_MAX=100;
+const FUEL_BURN=7;                   // fuel/s while thrusting
+const SCOOP_RATE=26;                 // fuel/s while inside scoop ring
+const MAX_SPEED=350;
+const SHIP_R=5;
+const CRASH_PAD=4;                   // extra collision padding
+const EDGE=90;                       // lose when beyond world by this much
+const DELIVERIES_TO_WIN=8;
+const PICKUP_DIST=48;                // distance from moon centre to grab/drop
+const MOON_NAMES=["Vesper","Kip","Juniper","Cobalt","Milo","Ash","Nix","Bramble","Tarn","Petra"];
+
+// ---------- canvas / scaling ----------
+const canvas=document.getElementById("stage");
+const ctx=canvas.getContext("2d");
+let viewScale=1, viewOX=0, viewOY=0;
+function resize(){
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  const cw=window.innerWidth, ch=window.innerHeight;
+  canvas.width=cw*dpr; canvas.height=ch*dpr;
+  canvas.style.width=cw+"px"; canvas.style.height=ch+"px";
+  viewScale=Math.min(cw/W, ch/H);
+  viewOX=(cw-W*viewScale)/2; viewOY=(ch-H*viewScale)/2;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener("resize",resize); resize();
+function toWorld(cx,cy){ // client px -> world px
+  const r=canvas.getBoundingClientRect();
+  return {x:(cx-r.left-viewOX)/viewScale, y:(cy-r.top-viewOY)/viewScale};
+}
+function w2s(x,y){return {x:viewOX+x*viewScale, y:viewOY+y*viewScale};}
+
+// ---------- system layout (built once per run with seeded RNG) ----------
+let bodies=[], stars=[];
+function buildSystem(){
+  const rnd=mulberry32(0xA0B11F);
+  const sun={kind:"sun",name:"Aurelia",x:W/2,y:H/2,r:44,GM:8.6e5,hue:38};
+  bodies=[sun];
+  // Elliptical orbits keep every planet & moon inside the 1600x900 playfield at all times,
+  // so every moon is always a reachable, on-map mission target.
+  const planetDefs=[
+    {rx:300, ry:240, w:0.150, r:24, GM:2.4e4, hue:205, name:"Cerule",  moons:[[64, 0.60, 10],[96,-0.38, 12]]},
+    {rx:560, ry:310, w:0.058, r:30, GM:3.4e4, hue:20,  name:"Ochra",   moons:[[72, 0.45, 11],[110,-0.30,13]]},
+    {rx:680, ry:260, w:0.036, r:20, GM:1.5e4, hue:150, name:"Viridia", moons:[[60,-0.65, 9],[92, 0.48, 11]]},
+  ];
+  let mi=0;
+  planetDefs.forEach((pd,pi)=>{
+    const ang0=pi*2.1+rnd()*0.8;
+    const planet={kind:"planet",name:pd.name,r:pd.r,GM:pd.GM,hue:pd.hue,
+      rx:pd.rx,ry:pd.ry,w:pd.w,ang:ang0,x:0,y:0,moons:[]};
+    pd.moons.forEach((md,k)=>{
+      const moon={kind:"moon",name:MOON_NAMES[mi++],r:md[2],GM:2500,
+        orbitR:md[0],w:md[1],ang:rnd()*Math.PI*2,planet:pi,x:0,y:0};
+      planet.moons.push(moon); bodies.push(moon);
+    });
+    bodies.push(planet);
+  });
+  stars=[];
+  for(let i=0;i<170;i++) stars.push({x:rnd()*W,y:rnd()*H,s:0.5+rnd()*1.6,tw:rnd()*Math.PI*2});
+}
+const sun=()=>bodies[0];
+const planets=()=>bodies.filter(b=>b.kind==="planet");
+const moons=()=>bodies.filter(b=>b.kind==="moon");
+
+function updateBodies(t){
+  // planets first, then moons (moons depend on their planet's position this frame)
+  for(const b of bodies){
+    if(b.kind==="planet"){ b.x=W/2+Math.cos(b.ang)*b.rx; b.y=H/2+Math.sin(b.ang)*b.ry; }
+  }
+  for(const b of bodies){
+    if(b.kind==="moon"){
+      const p=planets()[b.planet];
+      b.x=p.x+Math.cos(b.ang)*b.orbitR; b.y=p.y+Math.sin(b.ang)*b.orbitR;
+    }
+  }
+}
+function advanceBodies(dt){ for(const b of bodies){ if(b.w) b.ang+=b.w*dt; } }
+
+// ---------- game state ----------
+const game={
+  state:"title",            // title | playing | won | lost
+  ship:{x:0,y:0,vx:0,vy:0,a:0},
+  fuel:FUEL_MAX,
+  score:0, deliveries:0,
+  carrying:false,
+  mission:{from:null,to:null},   // moon refs
+  trail:[], particles:[],
+  time:0, runTime:0,
+  scoop:false, lowFuelT:0,
+  thrusting:false,
+  loseReason:"", winFuel:0, crashes:0,
+  screenShake:0, flash:0,
+};
+
+function spawnShip(){
+  const s=game.ship;
+  s.x=W/2-130; s.y=H/2; s.a=0;
+  const v=Math.sqrt(sun().GM/130);        // stable circular solar orbit start
+  s.vx=0; s.vy=-v;
+  game.trail.length=0; game.particles.length=0;
+}
+
+function newMission(first){
+  const ms=moons();
+  const s=game.ship;
+  // pickups happen near the ship's current position (first leg: nearest moon),
+  // delivery target is any other moon — a courier route across the system
+  const near=ms.slice().sort((a,b)=>
+    Math.hypot(a.x-s.x,a.y-s.y)-Math.hypot(b.x-s.x,b.y-s.y));
+  let from;
+  if(first){ from=near[0]; }
+  else{ from=near[Math.floor(Math.random()*Math.min(3,near.length))]; }
+  let to;
+  if(first){
+    // first contract is short: deliver to one of the 3 moons nearest the pickup
+    const nearTo=ms.filter(m=>m!==from).sort((a,b)=>
+      Math.hypot(a.x-from.x,a.y-from.y)-Math.hypot(b.x-from.x,b.y-from.y));
+    to=nearTo[Math.floor(Math.random()*Math.min(3,nearTo.length))];
+  } else {
+    do{ to=ms[Math.floor(Math.random()*ms.length)]; }while(to===from);
+  }
+  game.mission={from,to};
+  game.carrying=false;
+}
+
+function resetRun(){
+  buildSystem(); updateBodies(0);
+  game.state="playing"; game.fuel=FUEL_MAX; game.score=0; game.deliveries=0;
+  game.carrying=false; game.mission={from:null,to:null};
+  game.time=0; game.runTime=0; game.scoop=false; game.loseReason="";
+  game.crashes=0; game.screenShake=0; game.flash=0;
+  spawnShip();
+  newMission(true);   // after spawnShip so the first pickup is near the ship
+  updateHUDVisibility();
+}
+
+// ---------- input ----------
+const keys=new Set();
+window.addEventListener("keydown",e=>{
+  if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+  keys.add(e.key.toLowerCase());
+  if(e.key.toLowerCase()==="r"){ resetRun(); return; }
+  if(game.state!=="playing" && (e.key==="Enter"||e.key===" ")) startOrRestart();
+  ensureAudio();
+});
+window.addEventListener("keyup",e=>keys.delete(e.key.toLowerCase()));
+
+const ptr={down:false,x:0,y:0};
+canvas.addEventListener("pointerdown",e=>{
+  ensureAudio();
+  canvas.setPointerCapture(e.pointerId);
+  const p=toWorld(e.clientX,e.clientY); ptr.down=true; ptr.x=p.x; ptr.y=p.y;
+  if(game.state!=="playing") startOrRestart();
+});
+canvas.addEventListener("pointermove",e=>{
+  const p=toWorld(e.clientX,e.clientY); ptr.x=p.x; ptr.y=p.y;
+});
+const ptrEnd=()=>{ptr.down=false;};
+canvas.addEventListener("pointerup",ptrEnd);
+canvas.addEventListener("pointercancel",ptrEnd);
+
+function startOrRestart(){
+  if(game.state==="title"||game.state==="won"||game.state==="lost") resetRun();
+}
+document.getElementById("startBtn").addEventListener("click",()=>{ensureAudio();resetRun();});
+document.getElementById("winRestart").addEventListener("click",()=>{ensureAudio();resetRun();});
+document.getElementById("loseRestart").addEventListener("click",()=>{ensureAudio();resetRun();});
+
+// ---------- audio (tiny code-only synth) ----------
+let AC=null, muted=false;
+function ensureAudio(){ if(!AC){ try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} }
+  if(AC&&AC.state==="suspended") AC.resume(); }
+document.getElementById("mute").addEventListener("click",e=>{
+  muted=!muted; e.currentTarget.textContent=muted?"♪ Sound: off":"♪ Sound: on";
+});
+function beep(f,dur,type,vol,slide){
+  if(!AC||muted) return;
+  const o=AC.createOscillator(), g=AC.createGain(), t=AC.currentTime;
+  o.type=type||"sine"; o.frequency.setValueAtTime(f,t);
+  if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(30,slide),t+dur);
+  g.gain.setValueAtTime(vol||0.08,t); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t+dur+0.02);
+}
+const sfx={
+  pickup:()=>{beep(660,0.09,"triangle",0.1); setTimeout(()=>beep(990,0.12,"triangle",0.1),70);},
+  deliver:()=>{beep(523,0.09,"square",0.06); setTimeout(()=>beep(784,0.12,"square",0.06),80);
+               setTimeout(()=>beep(1046,0.16,"square",0.06),160);},
+  crash:()=>{beep(220,0.5,"sawtooth",0.14,40); beep(90,0.6,"sawtooth",0.12,30);},
+  win:()=>{[523,659,784,1046].forEach((f,i)=>setTimeout(()=>beep(f,0.22,"triangle",0.09),i*130));},
+  warn:()=>beep(300,0.15,"sine",0.05,240),
+  scoopTick:()=>beep(1200+Math.random()*300,0.05,"sine",0.02),
+};
+
+// ---------- physics ----------
+function gravityAt(x,y){
+  let ax=0, ay=0;
+  for(const b of bodies){
+    const dx=b.x-x, dy=b.y-y;
+    const d2=Math.max(dx*dx+dy*dy, (b.r*0.8)*(b.r*0.8));
+    const d=Math.sqrt(d2);
+    const a=b.GM/d2;
+    ax+=a*dx/d; ay+=a*dy/d;
+  }
+  return {ax,ay};
+}
+
+function step(dt){
+  advanceBodies(dt);
+  updateBodies(game.time+=dt);
+  if(game.state!=="playing") return;
+  game.runTime+=dt;
+  const s=game.ship;
+
+  // --- controls: keyboard ---
+  let rot=0, thr=false;
+  if(keys.has("arrowleft")||keys.has("a")) rot-=1;
+  if(keys.has("arrowright")||keys.has("d")) rot+=1;
+  if(keys.has("arrowup")||keys.has("w")) thr=true;
+  // --- controls: pointer (mouse & touch) — hold to steer & thrust toward it ---
+  if(ptr.down){
+    const want=Math.atan2(ptr.y-s.y, ptr.x-s.x);
+    let da=want-s.a; while(da>Math.PI)da-=2*Math.PI; while(da<-Math.PI)da+=2*Math.PI;
+    const turn=Math.sign(da)*Math.min(Math.abs(da)/dt, POINT_TURN);
+    s.a+=turn*dt;
+    if(Math.abs(da)<1.1) thr=true;          // thrust while roughly facing the target
+  } else {
+    s.a+=rot*ROT_SPEED*dt;
+  }
+
+  game.thrusting=thr&&game.fuel>0;
+  if(game.thrusting){
+    s.vx+=Math.cos(s.a)*THRUST*dt; s.vy+=Math.sin(s.a)*THRUST*dt;
+    game.fuel=Math.max(0,game.fuel-FUEL_BURN*dt);
+    // exhaust particles
+    for(let i=0;i<2;i++) game.particles.push({
+      x:s.x-Math.cos(s.a)*8, y:s.y-Math.sin(s.a)*8,
+      vx:s.vx-Math.cos(s.a)*(90+Math.random()*60)+(Math.random()-0.5)*30,
+      vy:s.vy-Math.sin(s.a)*(90+Math.random()*60)+(Math.random()-0.5)*30,
+      life:0.4+Math.random()*0.3, t:0, hue:30+Math.random()*20});
+  }
+
+  // --- gravity + integrate ---
+  const g=gravityAt(s.x,s.y);
+  s.vx+=g.ax*dt; s.vy+=g.ay*dt;
+  const sp=Math.hypot(s.vx,s.vy);
+  if(sp>MAX_SPEED){ s.vx*=MAX_SPEED/sp; s.vy*=MAX_SPEED/sp; }
+  s.x+=s.vx*dt; s.y+=s.vy*dt;
+
+  // --- trail ---
+  if(game.runTime%0.03<dt){ game.trail.push({x:s.x,y:s.y}); if(game.trail.length>80) game.trail.shift(); }
+
+  // --- fuel scoop near planets ---
+  game.scoop=false;
+  for(const p of planets()){
+    const d=Math.hypot(s.x-p.x, s.y-p.y);
+    if(d>p.r+22 && d<p.r+52){ game.scoop=true;
+      game.fuel=Math.min(FUEL_MAX, game.fuel+SCOOP_RATE*dt);
+    }
+  }
+
+  // --- collisions (checked before pickups: no reward while crashing) ---
+  for(const b of bodies){
+    if(Math.hypot(s.x-b.x,s.y-b.y) < b.r+SHIP_R+CRASH_PAD){ endGame(false,"crash",b); return; }
+  }
+
+  // --- pickups / deliveries ---
+  const tgt=game.carrying?game.mission.to:game.mission.from;
+  if(tgt && Math.hypot(s.x-tgt.x,s.y-tgt.y)<PICKUP_DIST){
+    if(!game.carrying){ game.carrying=true; sfx.pickup(); game.flash=0.5;
+      game.particles.push(...burst(tgt.x,tgt.y,"#ffc857",14)); }
+    else{
+      game.deliveries++;
+      const bonus=Math.floor(game.fuel/4);
+      game.score+=100+bonus;
+      game.fuel=Math.min(FUEL_MAX,game.fuel+25);
+      sfx.deliver(); game.flash=0.8;
+      game.particles.push(...burst(tgt.x,tgt.y,"#6fe3a5",22));
+      if(game.deliveries>=DELIVERIES_TO_WIN){ endGame(true); return; }
+      newMission(false);
+    }
+  }
+
+  if(s.x<-EDGE||s.x>W+EDGE||s.y<-EDGE||s.y>H+EDGE){ endGame(false,"lost"); return; }
+
+  // --- particles ---
+  for(let i=game.particles.length-1;i>=0;i--){
+    const p=game.particles[i]; p.t+=dt;
+    if(p.t>p.life){ game.particles.splice(i,1); continue; }
+    p.x+=p.vx*dt; p.y+=p.vy*dt;
+  }
+  game.lowFuelT = game.fuel<20 ? game.lowFuelT+dt : 0;
+  if(game.fuel<20 && game.lowFuelT>0 && Math.floor(game.runTime*1.2)!==Math.floor((game.runTime-dt)*1.2)) sfx.warn();
+  game.screenShake=Math.max(0,game.screenShake-dt*3);
+  game.flash=Math.max(0,game.flash-dt*2);
+}
+
+function burst(x,y,color,n){
+  const out=[];
+  for(let i=0;i<n;i++){ const a=Math.random()*Math.PI*2, v=40+Math.random()*90;
+    out.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,life:0.5+Math.random()*0.4,t:0,color}); }
+  return out;
+}
+
+function endGame(won,reason,body){
+  if(won){ game.state="won"; sfx.win();
+    document.getElementById("winScore").textContent=game.score;
+    document.getElementById("winStats").textContent=
+      `${game.deliveries} packages delivered in ${game.runTime.toFixed(1)}s · fuel left ${Math.round(game.fuel)}`;
+    show("winScreen");
+  } else {
+    game.state="lost"; game.crashes++; sfx.crash(); game.screenShake=1;
+    game.loseReason = reason==="crash"
+      ? `You crashed into ${body?body.name:"a body"} — ${game.carrying?"the package was vaporised.":"no package aboard."}`
+      : "You drifted beyond the edge of the charted system.";
+    document.getElementById("loseReason").textContent=game.loseReason;
+    document.getElementById("loseScore").textContent=game.score;
+    document.getElementById("loseStats").textContent=
+      `${game.deliveries}/${DELIVERIES_TO_WIN} packages delivered · survived ${game.runTime.toFixed(1)}s`;
+    show("loseScreen");
+  }
+}
+function show(id){ for(const s of document.querySelectorAll(".screen")) s.classList.add("hidden");
+  document.getElementById(id).classList.remove("hidden"); }
+function updateHUDVisibility(){ document.querySelectorAll(".screen").forEach(s=>s.classList.add("hidden")); }
+
+// ---------- rendering ----------
+function draw(){
+  const cw=window.innerWidth, ch=window.innerHeight;
+  ctx.fillStyle="#05070d"; ctx.fillRect(0,0,cw,ch);
+
+  ctx.save();
+  // letterbox clip + shake
+  let shx=0, shy=0;
+  if(game.screenShake>0){ shx=(Math.random()-0.5)*10*game.screenShake; shy=(Math.random()-0.5)*10*game.screenShake; }
+  ctx.beginPath(); ctx.rect(viewOX+shx,viewOY+shy,W*viewScale,H*viewScale); ctx.clip();
+  ctx.translate(viewOX+shx,viewOY+shy); ctx.scale(viewScale,viewScale);
+
+  // background
+  const bg=ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,"#070b16"); bg.addColorStop(1,"#0b0910");
+  ctx.fillStyle=bg; ctx.fillRect(-20,-20,W+40,H+40);
+
+  // stars
+  for(const st of stars){
+    const tw=0.5+0.5*Math.sin(game.time*1.5+st.tw);
+    ctx.globalAlpha=0.25+0.55*tw;
+    ctx.fillStyle="#cfd8ec";
+    ctx.fillRect(st.x,st.y,st.s,st.s);
+  }
+  ctx.globalAlpha=1;
+
+  // edge warning zone
+  ctx.strokeStyle="rgba(255,107,107,0.28)"; ctx.setLineDash([8,10]); ctx.lineWidth=2;
+  ctx.strokeRect(-EDGE+8,-EDGE+8,W+2*EDGE-16,H+2*EDGE-16);
+  ctx.setLineDash([]);
+
+  // orbit paths
+  ctx.strokeStyle="rgba(255,255,255,0.05)"; ctx.lineWidth=1;
+  for(const p of planets()){ ctx.beginPath(); ctx.ellipse(W/2,H/2,p.rx,p.ry,0,0,Math.PI*2); ctx.stroke();
+    for(const m of p.moons){ ctx.beginPath(); ctx.arc(p.x,p.y,m.orbitR,0,Math.PI*2); ctx.stroke(); } }
+
+  // scoop rings
+  for(const p of planets()){
+    ctx.strokeStyle="rgba(111,227,165,0.30)"; ctx.setLineDash([3,7]); ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r+52,0,Math.PI*2); ctx.stroke();
+    ctx.strokeStyle="rgba(255,107,107,0.35)";
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r+22,0,Math.PI*2); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // bodies
+  drawBody(sun());
+  for(const p of planets()) drawBody(p);
+  for(const m of moons()) drawBody(m);
+
+  // trail
+  if(game.trail.length>1){
+    ctx.lineWidth=2;
+    for(let i=1;i<game.trail.length;i++){
+      ctx.globalAlpha=(i/game.trail.length)*0.45;
+      ctx.strokeStyle="#7fd4ff";
+      ctx.beginPath(); ctx.moveTo(game.trail[i-1].x,game.trail[i-1].y); ctx.lineTo(game.trail[i].x,game.trail[i].y); ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+  }
+
+  // particles
+  for(const p of game.particles){
+    const k=1-p.t/p.life;
+    ctx.globalAlpha=k*0.9;
+    ctx.fillStyle=p.color||(p.hue?`hsl(${p.hue},95%,60%)`:"#ffd27f");
+    ctx.beginPath(); ctx.arc(p.x,p.y,2.4*k+0.6,0,Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+
+  // mission marker: package at source, or beacon at target
+  drawMissionMarkers();
+
+  // ship
+  if(game.state==="playing"||game.state==="won") drawShip();
+
+  ctx.restore();
+
+  drawHUD();
+}
+
+function drawBody(b){
+  const pulse=0.5+0.5*Math.sin(game.time*2+b.x);
+  if(b.kind==="sun"){
+    const glow=ctx.createRadialGradient(b.x,b.y,b.r*0.4,b.x,b.y,b.r*3.2);
+    glow.addColorStop(0,"rgba(255,190,80,0.55)"); glow.addColorStop(1,"rgba(255,150,40,0)");
+    ctx.fillStyle=glow; ctx.beginPath(); ctx.arc(b.x,b.y,b.r*3.2,0,Math.PI*2); ctx.fill();
+    const g2=ctx.createRadialGradient(b.x-b.r*0.3,b.y-b.r*0.3,2,b.x,b.y,b.r);
+    g2.addColorStop(0,"#fff3c4"); g2.addColorStop(0.55,"#ffb347"); g2.addColorStop(1,"#e2701d");
+    ctx.fillStyle=g2; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
+  } else if(b.kind==="planet"){
+    const g2=ctx.createRadialGradient(b.x-b.r*0.35,b.y-b.r*0.35,1,b.x,b.y,b.r);
+    g2.addColorStop(0,`hsl(${b.hue},65%,72%)`); g2.addColorStop(0.6,`hsl(${b.hue},60%,45%)`);
+    g2.addColorStop(1,`hsl(${b.hue},65%,18%)`);
+    ctx.fillStyle=g2; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
+    // band
+    ctx.strokeStyle=`hsla(${b.hue},70%,80%,0.35)`; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.ellipse(b.x,b.y,b.r*0.95,b.r*0.32,-0.4,0,Math.PI*2); ctx.stroke();
+  } else { // moon
+    ctx.fillStyle=`hsl(220,8%,${58+8*pulse}%)`;
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="rgba(0,0,0,0.25)";
+    ctx.beginPath(); ctx.arc(b.x+b.r*0.3,b.y+b.r*0.25,b.r*0.45,0,Math.PI*2); ctx.fill();
+  }
+  // name label
+  if(b.kind!=="sun"){
+    ctx.fillStyle="rgba(190,200,220,0.75)"; ctx.font="11px Verdana,sans-serif"; ctx.textAlign="center";
+    ctx.fillText(b.name,b.x,b.y-b.r-8);
+  }
+}
+
+function drawMissionMarkers(){
+  const pulse=0.5+0.5*Math.sin(game.time*4);
+  if(!game.carrying && game.mission.from){
+    const m=game.mission.from;
+    ctx.strokeStyle="rgba(255,200,87,0.9)"; ctx.lineWidth=2.5;
+    ctx.setLineDash([5,6]);
+    ctx.beginPath(); ctx.arc(m.x,m.y,m.r+16+4*pulse,0,Math.PI*2); ctx.stroke();
+    ctx.setLineDash([]);
+    // package icon
+    ctx.save(); ctx.translate(m.x,m.y-m.r-26); ctx.rotate(Math.sin(game.time*2)*0.15);
+    ctx.fillStyle="#ffc857"; ctx.fillRect(-7,-6,14,12);
+    ctx.strokeStyle="#7a5a16"; ctx.lineWidth=1.5; ctx.strokeRect(-7,-6,14,12);
+    ctx.beginPath(); ctx.moveTo(0,-6); ctx.lineTo(0,6); ctx.stroke();
+    ctx.restore();
+    label(m.x,m.y-m.r-40,"PICK UP","#ffc857");
+  }
+  const to=game.carrying?game.mission.to:null;
+  if(to){
+    ctx.strokeStyle="rgba(111,227,165,0.9)"; ctx.lineWidth=2.5;
+    ctx.setLineDash([5,6]);
+    ctx.beginPath(); ctx.arc(to.x,to.y,to.r+16+4*pulse,0,Math.PI*2); ctx.stroke();
+    ctx.setLineDash([]);
+    label(to.x,to.y-to.r-28,"DELIVER","#6fe3a5");
+  }
+  // golden guide arrow toward current objective
+  const tgt=game.carrying?game.mission.to:game.mission.from;
+  if(tgt&&game.state==="playing") drawGuideArrow(tgt);
+}
+
+function label(x,y,txt,color){
+  ctx.font="bold 11px Verdana,sans-serif"; ctx.textAlign="center";
+  ctx.fillStyle=color; ctx.fillText(txt,x,y);
+}
+
+function drawGuideArrow(tgt){
+  const s=game.ship;
+  const dx=tgt.x-s.x, dy=tgt.y-s.y, d=Math.hypot(dx,dy);
+  const a=Math.atan2(dy,dx);
+  const margin=34;
+  const sx=Math.max(margin,Math.min(W-margin,s.x+Math.cos(a)*Math.min(d,d))),
+        sy=Math.max(margin,Math.min(H-margin,s.y+Math.sin(a)*Math.min(d,d)));
+  // draw arrow ahead of ship pointing at target
+  const ax=s.x+Math.cos(a)*46, ay=s.y+Math.sin(a)*46;
+  ctx.save(); ctx.translate(ax,ay); ctx.rotate(a);
+  ctx.fillStyle="rgba(255,200,87,0.95)";
+  ctx.beginPath(); ctx.moveTo(10,0); ctx.lineTo(-6,-7); ctx.lineTo(-2,0); ctx.lineTo(-6,7); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  if(d>380){
+    ctx.font="11px Verdana,sans-serif"; ctx.textAlign="center";
+    ctx.fillStyle="rgba(255,200,87,0.85)";
+    ctx.fillText(Math.round(d)+"",ax,ay+20);
+  }
+}
+
+function drawShip(){
+  const s=game.ship;
+  ctx.save(); ctx.translate(s.x,s.y); ctx.rotate(s.a);
+  // hull
+  ctx.fillStyle="#e8ecf4";
+  ctx.beginPath(); ctx.moveTo(11,0); ctx.lineTo(-8,-7); ctx.lineTo(-4,0); ctx.lineTo(-8,7); ctx.closePath(); ctx.fill();
+  ctx.fillStyle="#39a0ff";
+  ctx.beginPath(); ctx.moveTo(4,0); ctx.lineTo(-4,-3.4); ctx.lineTo(-4,3.4); ctx.closePath(); ctx.fill();
+  // flame
+  if(game.thrusting){
+    const f=6+Math.random()*7;
+    const g=ctx.createLinearGradient(-6,0,-6-f,0);
+    g.addColorStop(0,"#ffd27f"); g.addColorStop(1,"rgba(255,120,40,0)");
+    ctx.fillStyle=g;
+    ctx.beginPath(); ctx.moveTo(-6,-3.5); ctx.lineTo(-6-f,0); ctx.lineTo(-6,3.5); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+  // low-fuel ring
+  if(game.fuel<20 && game.state==="playing"){
+    ctx.strokeStyle=`rgba(255,107,107,${0.4+0.4*Math.sin(game.time*8)})`;
+    ctx.lineWidth=2; ctx.beginPath(); ctx.arc(s.x,s.y,16,0,Math.PI*2); ctx.stroke();
+  }
+  // carried package
+  if(game.carrying){
+    ctx.save(); ctx.translate(s.x,s.y); ctx.rotate(game.time*2);
+    ctx.fillStyle="#ffc857"; ctx.fillRect(6,-12,9,8);
+    ctx.strokeStyle="#7a5a16"; ctx.strokeRect(6,-12,9,8); ctx.restore();
+  }
+}
+
+function drawHUD(){
+  if(game.state==="title") return;
+  ctx.save();
+  ctx.font="12px Verdana,sans-serif"; ctx.textAlign="left";
+  // fuel bar
+  const bx=16,by=14,bw=210,bh=16;
+  ctx.fillStyle="rgba(10,13,22,0.75)"; ctx.fillRect(bx-6,by-6,bw+72,bh+12);
+  ctx.strokeStyle="rgba(255,255,255,0.18)"; ctx.strokeRect(bx,by,bw,bh);
+  const fr=Math.max(0,game.fuel/FUEL_MAX);
+  const low=fr<0.2, hot=0.5+0.5*Math.sin(game.time*9);
+  ctx.fillStyle=low?`rgba(255,107,107,${0.55+0.45*hot})`:(fr<0.5?"#ffc857":"#6fe3a5");
+  ctx.fillRect(bx+2,by+2,(bw-4)*fr,bh-4);
+  ctx.fillStyle="#e8ecf4"; ctx.fillText("FUEL",bx+2,by-2+1);
+  ctx.fillStyle=game.scoop?"#6fe3a5":"#8b94a8";
+  ctx.fillText(game.scoop?"+SCOOP":Math.round(game.fuel)+"%",bx+bw+12,by+bh-4);
+
+  // deliveries + objective
+  ctx.textAlign="center";
+  ctx.font="bold 15px Verdana,sans-serif"; ctx.fillStyle="#e8ecf4";
+  const dtxt=`DELIVERIES  ${game.deliveries} / ${DELIVERIES_TO_WIN}`;
+  ctx.fillText(dtxt,W/2,26);
+  const tgt=game.carrying?game.mission.to:game.mission.from;
+  ctx.font="12px Verdana,sans-serif";
+  ctx.fillStyle=game.carrying?"#6fe3a5":"#ffc857";
+  if(tgt) ctx.fillText(game.carrying?`▸ Deliver to ${tgt.name}`:`▸ Pick up package at ${tgt.name}`,W/2,46);
+
+  // score
+  ctx.textAlign="right"; ctx.font="bold 15px Verdana,sans-serif"; ctx.fillStyle="#ffc857";
+  ctx.fillText(String(game.score).padStart(4,"0"),W-16,26);
+  ctx.font="11px Verdana,sans-serif"; ctx.fillStyle="#8b94a8";
+  ctx.fillText("SCORE",W-16,42);
+
+  // speed readout
+  const sp=Math.hypot(game.ship.vx,game.ship.vy);
+  ctx.textAlign="left"; ctx.fillStyle="#8b94a8";
+  ctx.fillText(`VEL ${Math.round(sp)}`,16,52);
+
+  // flash overlay
+  if(game.flash>0){ ctx.fillStyle=`rgba(255,240,200,${game.flash*0.25})`; ctx.fillRect(0,0,W,H); }
+  ctx.restore();
+}
+
+// ---------- main loop (fixed timestep, bounded catch-up) ----------
+let last=performance.now(), acc=0;
+function frame(now){
+  const el=Math.min((now-last)/1000, MAX_CATCHUP); last=now;
+  acc+=el;
+  let n=0;
+  while(acc>=DT && n<40){ step(DT); acc-=DT; n++; }
+  if(n===40) acc=0;
+  draw();
+  requestAnimationFrame(frame);
+}
+buildSystem(); updateBodies(0); spawnShip(); game.state="title";
+requestAnimationFrame(frame);
+
+// test hook (used by automated checks; harmless in play)
+window.__game={game,resetRun,step:()=>step(DT),keys,ptr,DELIVERIES_TO_WIN,getBodies:()=>bodies};
+</script>
+</body>
+</html>

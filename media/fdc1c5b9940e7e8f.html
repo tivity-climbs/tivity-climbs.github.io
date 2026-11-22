@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#eeeaf6">
+<title>Gummy bears — a little soft-body playground</title>
+<style>
+:root{color-scheme:light;--ink:#493d59;--muted:#81748e;--paper:#eeeaf6;--line:#d9d0e3}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}body{background:var(--paper);color:var(--ink);font-family:"Trebuchet MS",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+main{height:100%;height:100svh;display:flex;flex-direction:column;padding:36px 48px 22px;max-width:2200px;margin:auto}
+header{display:flex;align-items:center;justify-content:space-between;gap:32px;position:relative;z-index:2;flex-shrink:0}
+h1{font-family:"Arial Rounded MT Bold","Trebuchet MS",Arial,sans-serif;font-size:clamp(48px,5.7vw,86px);font-weight:900;letter-spacing:-.065em;line-height:1;margin:0 0 12px}h1 span{color:#a997b8}
+.subtitle{font-size:15px;margin:0;letter-spacing:.01em;color:var(--muted)}
+.tools{display:flex;align-items:center;gap:28px}.invitation{font-size:14px;line-height:1.65;max-width:190px;margin:0;color:#756781}.invitation strong{font-weight:600;color:var(--ink)}
+button{font:inherit;border:1px solid #d2c7de;background:#ffffffa8;color:var(--ink);padding:14px 21px;border-radius:30px;display:flex;align-items:center;gap:10px;cursor:pointer;white-space:nowrap;transition:background .16s,transform .16s,box-shadow .16s;font-size:14px;font-weight:600;min-height:48px}button:hover{background:#fff;box-shadow:0 4px 12px #67527612;transform:translateY(-1px)}button:active{transform:translateY(1px)}button:focus-visible,canvas:focus-visible{outline:3px solid #9b75c3;outline-offset:5px}button svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.playground{position:relative;flex:1;min-height:0;margin-top:16px;isolation:isolate}.playground:before{content:"";position:absolute;inset:0 -20px 0;pointer-events:none;background:radial-gradient(ellipse at 50% 61%,#ffffffb0 0,#ffffff45 37%,#ffffff00 69%);z-index:-1}
+canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab;-webkit-tap-highlight-color:transparent;user-select:none}canvas.grabbing{cursor:grabbing}
+.hint{position:absolute;left:50%;top:10px;transform:translateX(-50%);pointer-events:none;display:flex;align-items:center;gap:8px;color:#95879f;font-size:12px;white-space:nowrap;transition:opacity .4s}.hint svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+footer{flex-shrink:0;display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--line);padding-top:18px;gap:18px;font-size:12px;color:var(--muted)}.status{display:flex;align-items:center;gap:9px;color:#6b5c77}.dot{width:7px;height:7px;background:#ae8bbd;border-radius:50%;box-shadow:0 0 0 4px #ae8bbd13}.footer-note{margin:0}.kbd-note{font-size:11px;color:#9d90a7;margin-left:10px}
+@media(max-width:700px){main{padding:25px 20px 18px}header{gap:14px;align-items:flex-start}h1{font-size:48px;margin-bottom:10px}.subtitle{font-size:12px;max-width:180px;line-height:1.5}.tools{gap:0;padding-top:5px}.invitation{display:none}button{font-size:12px;padding:12px 14px;gap:7px;min-height:44px}.playground{margin-top:15px}.hint{font-size:11px;top:12px}footer{padding-top:15px;font-size:10px;gap:8px}.kbd-note{display:none}.footer-note{max-width:130px;text-align:right;line-height:1.5}}
+@media(max-height:560px) and (min-width:701px){main{padding:18px 30px 12px}h1{font-size:48px}.subtitle{font-size:12px}.playground{margin-top:0}footer{padding-top:10px}.hint{top:4px}}
+@media(prefers-reduced-motion:reduce){button,.hint{transition:none}}
+</style>
+</head>
+<body>
+<main>
+<header>
+ <div><h1>gummy bears<span>.</span></h1><p class="subtitle">A little soft-body playground.</p></div>
+ <div class="tools"><p class="invitation"><strong>Grab. Stretch. Squish.</strong><br>Let go for a little chaos.</p><button id="reset" type="button" aria-label="Reset gummy bear pile"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1.7 7M4 4v6h6"/></svg>Reset pile</button></div>
+</header>
+<section class="playground" aria-label="Interactive gummy bear playground">
+ <canvas id="c" tabindex="0" aria-label="Soft gummy bears. Drag a bear to stretch it, push it against the floor to squash it, and release to fling. Multiple fingers can pull different parts. With keyboard, use arrow keys to toss a bear, Space to choose another, and R to reset."></canvas>
+ <div class="hint" id="hint"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 13-2-8c-.7-2 2-2.6 2.5-.7l1.6 6.1.1-7c0-2 2.7-2 2.7 0l.2 7 .9-5c.4-1.8 2.8-1.3 2.5.5l-.5 6 1.3-2c1-1.3 3 .1 2 1.7l-3.4 7.2c-1.5 3.4-7.3 3.4-9.4.5l-3.6-5c-1.2-1.6.9-3 2-1.7L9 15"/></svg>Pull an ear. Squish a belly. Make a mess.</div>
+</section>
+<footer><div class="status"><span class="dot"></span><span id="status" aria-live="polite">Soft, squishy &amp; a little unpredictable.</span><span class="kbd-note">Mouse or touch</span></div><p class="footer-note">All the fun. None of the sticky fingers.</p></footer>
+</main>
+<script>
+'use strict';
+(() => {
+const canvas=document.getElementById('c'), ctx=canvas.getContext('2d',{alpha:true});
+const status=document.getElementById('status'), hint=document.getElementById('hint');
+let gel=null;
+let W=0,H=0,DPR=1,S=75,bears=[],grabs=new Map(),accumulator=0,last=0,seed=47,selected=0,interacted=false;
+const STEP=1/120, ITERATIONS=5, GRAVITY=1280;
+const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const rand=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296};
+// Each anatomical mass has a radius, and a flexible network of rest-length links.
+const anatomy=[
+ [0,-.53,.405],[-.37,-.88,.195],[.37,-.88,.195],
+ [0,-.03,.335],[0,.36,.39],[-.52,.025,.205],[.52,.025,.205],
+ [-.24,.61,.245],[.24,.61,.245],[-.32,.82,.245],[.32,.82,.245]
+];
+const flavors=[{name:'raspberry',h:345,s:90,l:52},{name:'tangerine',h:23,s:99,l:50},{name:'lemon',h:47,s:99,l:49},{name:'apple',h:151,s:77,l:40},{name:'blackcurrant',h:271,s:69,l:60},{name:'blue raspberry',h:191,s:91,l:44}];
+const col=(f,l,a=1)=>`hsla(${f.h},${f.s}%,${l}%,${a})`;
+// A sculpted candy silhouette. All control points are attached to the soft body;
+// even the eyes, embossed paws and specular highlights follow the deformation.
+const outline=[['M',0,-.88],['C',.07,-.88,.13,-.86,.17,-.84],['C',.13,-1.02,.28,-1.12,.41,-1.075],['C',.59,-1.04,.64,-.86,.55,-.75],['C',.53,-.72,.50,-.71,.48,-.70],['C',.60,-.50,.56,-.31,.41,-.21],['C',.58,-.27,.77,-.14,.755,.045],['C',.75,.22,.60,.30,.48,.235],['C',.46,.39,.43,.53,.47,.62],['C',.65,.72,.65,.96,.46,1.035],['C',.29,1.10,.12,1.04,.085,.89],['Q',0,.84,-.085,.89],['C',-.12,1.04,-.29,1.10,-.46,1.035],['C',-.65,.96,-.65,.72,-.47,.62],['C',-.43,.53,-.46,.39,-.48,.235],['C',-.60,.30,-.75,.22,-.755,.045],['C',-.77,-.14,-.58,-.27,-.41,-.21],['C',-.56,-.31,-.60,-.50,-.48,-.70],['C',-.50,-.71,-.53,-.72,-.55,-.75],['C',-.64,-.86,-.59,-1.04,-.41,-1.075],['C',-.28,-1.12,-.13,-1.02,-.17,-.84],['C',-.13,-.86,-.07,-.88,0,-.88],['Z']];
+const weightCache=new Map();
+function weights(x,y){const key=x+','+y;let a=weightCache.get(key);if(a)return a;let sum=0;a=anatomy.map((n,i)=>{const d=(x-n[0])**2+(y-n[1])**2;return {i,w:1/(d+.045)**2.3}}).sort((a,b)=>b.w-a.w).slice(0,4);for(const v of a)sum+=v.w;for(const v of a)v.w/=sum;weightCache.set(key,a);return a}
+function map(b,x,y){let px=0,py=0;for(const v of weights(x,y)){const n=b.nodes[v.i],r=anatomy[v.i],dx=(x-r[0])*S,dy=(y-r[1])*S;px+=v.w*(n.x+n.co*dx-n.si*dy);py+=v.w*(n.y+n.si*dx+n.co*dy)}return [px,py]}
+function pathFor(b,commands=outline){const p=new Path2D();for(const c of commands){let v=[];for(let i=1;i<c.length;i+=2)v.push(...map(b,c[i],c[i+1]));if(c[0]==='M')p.moveTo(...v);else if(c[0]==='C')p.bezierCurveTo(...v);else if(c[0]==='Q')p.quadraticCurveTo(...v);else if(c[0]==='L')p.lineTo(...v);else p.closePath()}return p}
+function makeBear(x,y,angle,flavor,id){const co=Math.cos(angle),si=Math.sin(angle);const b={id,flavor,nodes:[],links:[],path:null,angle,cx:x,cy:y};
+ anatomy.forEach(([rx,ry,r],i)=>{const px=x+(rx*co-ry*si)*S,py=y+(rx*si+ry*co)*S;b.nodes.push({x:px,y:py,px,py,vx:0,vy:0,r:r*S,inv:1/Math.max(.5,r*r*10),co,si,i,b})});
+ for(let i=0;i<anatomy.length;i++)for(let j=i+1;j<anatomy.length;j++){const a=anatomy[i],c=anatomy[j],d=Math.hypot(a[0]-c[0],a[1]-c[1]);if(d<1.02)b.links.push({a:i,b:j,rest:d*S,k:d<.65?.10:.035})}
+ return b;
+}
+function fit(b){let cx=0,cy=0,qx=0,qy=0;for(let i=0;i<11;i++){cx+=b.nodes[i].x;cy+=b.nodes[i].y;qx+=anatomy[i][0];qy+=anatomy[i][1]}cx/=11;cy/=11;qx/=11;qy/=11;let a=0,d=0;for(let i=0;i<11;i++){const x=anatomy[i][0]-qx,y=anatomy[i][1]-qy,px=b.nodes[i].x-cx,py=b.nodes[i].y-cy;a+=x*px+y*py;d+=x*py-y*px}const angle=Math.atan2(d,a);b.cx=cx;b.cy=cy;b.angle=angle;return {cx,cy,qx,qy,co:Math.cos(angle),si:Math.sin(angle)}}
+function rotations(b){fit(b);for(let i=0;i<11;i++){let a=0,d=0;const n=b.nodes[i],q=anatomy[i];for(const l of b.links){if(l.a!==i&&l.b!==i)continue;const j=l.a===i?l.b:l.a,r=anatomy[j],m=b.nodes[j],x=r[0]-q[0],y=r[1]-q[1],px=m.x-n.x,py=m.y-n.y,w=1/(x*x+y*y+.1);a+=w*(x*px+y*py);d+=w*(x*py-y*px)}const angle=Math.atan2(d,a);n.co=Math.cos(angle);n.si=Math.sin(angle)}}
+function shape(b,amount){const f=fit(b);for(let i=0;i<11;i++){const n=b.nodes[i],q=anatomy[i],x=(q[0]-f.qx)*S,y=(q[1]-f.qy)*S;n.x+=(f.cx+f.co*x-f.si*y-n.x)*amount;n.y+=(f.cy+f.si*x+f.co*y-n.y)*amount}}
+function bounds(n){const pad=9, floor=H-15;n.x=Math.max(n.r+pad,Math.min(W-n.r-pad,n.x));n.y=Math.max(n.r+5,Math.min(floor-n.r,n.y))}
+// Broad phase: a spatial hash bounds the contact work even while the pile scatters.
+function contacts(){const cell=S*.9,grid=new Map();for(const b of bears)for(const n of b.nodes){const ix=Math.floor(n.x/cell),iy=Math.floor(n.y/cell);for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){const bucket=grid.get((ix+dx)+','+(iy+dy));if(!bucket)continue;for(const m of bucket){if(m.b===b)continue;let x=n.x-m.x,y=n.y-m.y,rr=n.r+m.r,d2=x*x+y*y;if(d2>=rr*rr)continue;const d=Math.sqrt(d2)||.001,depth=(rr-d)*.83,xn=x/d,yn=y/d,inv=1/(n.inv+m.inv);n.x+=xn*depth*n.inv*inv;n.y+=yn*depth*n.inv*inv;m.x-=xn*depth*m.inv*inv;m.y-=yn*depth*m.inv*inv;
+ // Position-level friction stops an otherwise frictionless pile melting sideways.
+ const tx=-yn,ty=xn,slide=((n.x-n.px)-(m.x-m.px))*tx+((n.y-n.py)-(m.y-m.py))*ty,f=Math.max(-depth*.3,Math.min(depth*.3,slide*.18));n.x-=tx*f*n.inv*inv;n.y-=ty*f*n.inv*inv;m.x+=tx*f*m.inv*inv;m.y+=ty*f*m.inv*inv;
+ }}const key=ix+','+iy;let bucket=grid.get(key);if(!bucket)grid.set(key,bucket=[]);bucket.push(n)}}
+function grabConstraint(g){const b=g.b;let ax=0,ay=0,sum=0;for(const t of g.attach){const n=b.nodes[t.i];ax+=(n.x+n.co*t.ox-n.si*t.oy)*t.w;ay+=(n.y+n.si*t.ox+n.co*t.oy)*t.w;sum+=t.w*t.w*n.inv}let dx=(g.x-ax)*.48,dy=(g.y-ay)*.48;const max=S*.28,d=Math.hypot(dx,dy);if(d>max){dx*=max/d;dy*=max/d}for(const t of g.attach){const n=b.nodes[t.i],m=t.w*n.inv/sum;n.x+=dx*m;n.y+=dy*m}g.ax=ax;g.ay=ay}
+function step(dt){for(const b of bears)for(const n of b.nodes){n.px=n.x;n.py=n.y;n.vx*=.996;n.vy=n.vy*.996+GRAVITY*dt;n.x+=n.vx*dt;n.y+=n.vy*dt}
+ for(let k=0;k<ITERATIONS;k++){
+  for(const b of bears){shape(b,.0035);for(const l of b.links){const a=b.nodes[l.a],c=b.nodes[l.b],x=c.x-a.x,y=c.y-a.y,d=Math.hypot(x,y)||.001,t=(d-l.rest)/d*l.k/(a.inv+c.inv);a.x+=x*t*a.inv;a.y+=y*t*a.inv;c.x-=x*t*c.inv;c.y-=y*t*c.inv}}
+  contacts();for(const g of grabs.values())grabConstraint(g);for(const b of bears)for(const n of b.nodes)bounds(n);
+ }
+ for(const b of bears){for(const n of b.nodes){n.vx=Math.max(-2300,Math.min(2300,(n.x-n.px)/dt));n.vy=Math.max(-2300,Math.min(2300,(n.y-n.py)/dt));if(n.y>=H-15-n.r-.1){n.vx*=.92;if(n.vy>0)n.vy=0}if(n.x<=n.r+9.1||n.x>=W-n.r-9.1)n.vx*=.7}rotations(b)}
+}
+// Pre-rendered soft shadow, made from exactly the same vector outline; no assets.
+const shadow=document.createElement('canvas');shadow.width=160;shadow.height=216;const sh=shadow.getContext('2d');
+sh.translate(80,108);sh.scale(77,77);let shadowPath=new Path2D();for(const c of outline){const v=c.slice(1);if(c[0]==='M')shadowPath.moveTo(...v);else if(c[0]==='C')shadowPath.bezierCurveTo(...v);else if(c[0]==='Q')shadowPath.quadraticCurveTo(...v);else shadowPath.closePath()}sh.fillStyle='#433156';sh.shadowColor='#433156';sh.shadowBlur=9;sh.globalAlpha=.16;sh.fill(shadowPath);
+function local(b,x,y,fn){const p=map(b,x,y),u=map(b,x+.025,y),v=map(b,x,y+.025);ctx.save();ctx.transform((u[0]-p[0])/.025,(u[1]-p[1])/.025,(v[0]-p[0])/.025,(v[1]-p[1])/.025,p[0],p[1]);fn();ctx.restore()}
+function relief(b,x,y,rx,ry,depth=1){local(b,x,y,()=>{const f=b.flavor;ctx.beginPath();ctx.ellipse(0,0,rx,ry,0,0,Math.PI*2);let g=ctx.createLinearGradient(-rx,-ry,rx,ry);g.addColorStop(0,col(f,97,.38*depth));g.addColorStop(.32,col(f,72,.05));g.addColorStop(.73,col(f,f.l-13,.07*depth));g.addColorStop(1,col(f,24,.26*depth));ctx.fillStyle=g;ctx.fill();ctx.strokeStyle=col(f,98,.22);ctx.lineWidth=.012;ctx.stroke();ctx.beginPath();ctx.ellipse(-rx*.09,-ry*.025,rx*.88,ry*.88,0,Math.PI*1.03,Math.PI*1.62);ctx.strokeStyle='#ffffff66';ctx.lineWidth=.014;ctx.stroke()})}
+function shine(b,commands,width,alpha){ctx.strokeStyle=`rgba(255,255,255,${alpha})`;ctx.lineWidth=width*S;ctx.lineCap='round';ctx.stroke(pathFor(b,commands))}
+function drawBear(b){const f=b.flavor;const p=b.path=pathFor(b);let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;for(const n of b.nodes){minX=Math.min(minX,n.x-n.r);minY=Math.min(minY,n.y-n.r);maxX=Math.max(maxX,n.x+n.r);maxY=Math.max(maxY,n.y+n.r)}
+ ctx.save();ctx.translate(b.cx+3,b.cy+S*.07);ctx.rotate(b.angle);ctx.globalAlpha=.49;ctx.drawImage(shadow,-S*1.04,-S*1.49,S*2.08,S*2.81);ctx.restore();
+ let g=ctx.createLinearGradient(minX,minY,maxX,maxY);g.addColorStop(0,col(f,78,.66));g.addColorStop(.18,col(f,61,.71));g.addColorStop(.42,col(f,f.l,.72));g.addColorStop(.72,col(f,f.l-4,.80));g.addColorStop(1,col(f,f.l-16,.86));ctx.fillStyle=g;ctx.fill(p);
+ ctx.save();ctx.clip(p);
+ // Rounded gel edges and a soft refracted light pool inside the candy.
+ const rim=ctx.createLinearGradient(minX,minY,maxX,maxY);rim.addColorStop(0,col(f,97,.61));rim.addColorStop(.25,col(f,80,.10));rim.addColorStop(.70,col(f,24,.16));rim.addColorStop(1,col(f,17,.32));ctx.strokeStyle=rim;ctx.lineWidth=S*.10;ctx.stroke(p);
+ let pool=ctx.createRadialGradient(minX+(maxX-minX)*.37,minY+(maxY-minY)*.25,0,minX+(maxX-minX)*.5,minY+(maxY-minY)*.33,S*1.3);pool.addColorStop(0,col(f,95,.26));pool.addColorStop(.55,col(f,80,.02));pool.addColorStop(1,col(f,35,0));ctx.fillStyle=pool;ctx.fill(p);
+ relief(b,0,.31,.30,.40,.95);relief(b,-.375,-.88,.112,.12,.8);relief(b,.375,-.88,.112,.12,.8);relief(b,-.565,.04,.105,.16,.85);relief(b,.565,.04,.105,.16,.85);relief(b,-.325,.84,.175,.115,.8);relief(b,.325,.84,.175,.115,.8);relief(b,0,-.39,.23,.155,1.2);
+ // Molded eyes, nose and smile use the candy hue, rather than painted-on black.
+ for(const x of [-.174,.174])local(b,x,-.605,()=>{ctx.fillStyle=col(f,19,.48);ctx.beginPath();ctx.ellipse(0,0,.042,.049,0,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff9';ctx.beginPath();ctx.ellipse(-.009,-.015,.014,.011,0,0,Math.PI*2);ctx.fill()});
+ local(b,0,-.424,()=>{const g=ctx.createLinearGradient(0,-.04,0,.04);g.addColorStop(0,col(f,24,.58));g.addColorStop(1,col(f,35,.20));ctx.fillStyle=g;ctx.beginPath();ctx.ellipse(0,0,.071,.045,0,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff7';ctx.beginPath();ctx.ellipse(-.015,-.020,.025,.008,-.1,0,Math.PI*2);ctx.fill()});
+ ctx.strokeStyle=col(f,23,.32);ctx.lineWidth=.014*S;ctx.lineCap='round';ctx.stroke(pathFor(b,[['M',0,-.38],['L',0,-.335],['Q',-.045,-.29,-.09,-.33],['M',0,-.335],['Q',.045,-.29,.09,-.33]]));
+ // Narrow, bright softbox reflections make the translucent material read as gel.
+ shine(b,[['M',-.49,-.86],['C',-.51,-.97,-.38,-1.026,-.30,-.98]],.043,.76);
+ shine(b,[['M',.29,-1.0],['Q',.39,-1.04,.46,-.95]],.026,.62);
+ shine(b,[['M',-.405,-.65],['Q',-.46,-.51,-.41,-.425]],.048,.61);
+ shine(b,[['M',-.28,-.755],['Q',-.15,-.82,-.03,-.80]],.025,.47);
+ shine(b,[['M',-.64,-.08],['Q',-.71,.01,-.65,.11]],.037,.73);
+ shine(b,[['M',.52,-.12],['Q',.63,-.12,.66,-.035]],.030,.52);
+ shine(b,[['M',-.25,.12],['Q',-.30,.27,-.25,.39]],.038,.45);
+ shine(b,[['M',-.48,.78],['Q',-.51,.92,-.39,.96]],.035,.69);
+ shine(b,[['M',.23,.73],['Q',.34,.69,.43,.77]],.027,.5);
+ shine(b,[['M',.38,.38],['Q',.39,.49,.35,.55]],.025,.25);
+ ctx.restore();ctx.strokeStyle=col(f,28,.25);ctx.lineWidth=.8;ctx.stroke(p);
+}
+function draw(){ctx.setTransform(DPR,0,0,DPR,0,0);ctx.clearRect(0,0,W,H);
+ // A very subtle tabletop and contact-light ellipse ground the pile.
+ const floor=H-14;let g=ctx.createRadialGradient(W*.5,floor,0,W*.5,floor,W*.4);g.addColorStop(0,'rgba(115,81,133,.10)');g.addColorStop(1,'rgba(115,81,133,0)');ctx.save();ctx.translate(0,floor);ctx.scale(1,.055);ctx.translate(0,-floor);ctx.fillStyle=g;ctx.fillRect(0,floor-W*.4,W,W*.8);ctx.restore();
+ if(gel)gel.draw();else for(const b of bears)drawBear(b);
+ for(const g of grabs.values()){if(g.ax===undefined)continue;const d=Math.hypot(g.x-g.ax,g.y-g.ay);if(d>12){ctx.beginPath();ctx.moveTo(g.ax,g.ay);ctx.lineTo(g.x,g.y);ctx.strokeStyle='#6b537b40';ctx.lineWidth=1;ctx.setLineDash([3,4]);ctx.stroke();ctx.setLineDash([])}ctx.beginPath();ctx.arc(g.ax,g.ay,5,0,Math.PI*2);ctx.strokeStyle='#ffffffc9';ctx.lineWidth=1.5;ctx.stroke();ctx.beginPath();ctx.arc(g.ax,g.ay,7,0,Math.PI*2);ctx.strokeStyle='#67467530';ctx.lineWidth=1;ctx.stroke()}
+}
+function reset(){seed=47;for(const id of grabs.keys())if(canvas.hasPointerCapture(id))canvas.releasePointerCapture(id);grabs.clear();canvas.classList.remove('grabbing');canvas.style.cursor='grab';bears=[];selected=0;const mobile=W<620,cols=mobile?3:5,rows=3,count=cols*rows;S=Math.min(mobile?W/5.3:W/9.9,H/6.1,126);
+ const palette=mobile?[2,0,3,4,1,5,0,2,3]:[0,2,3,1,4,5,1,0,4,2,3,4,2,5,0];
+ for(let row=0;row<rows;row++)for(let c=0;c<cols;c++){const i=row*cols+c,x=W/2+(c-(cols-1)/2)*S*1.65+(rand()-.5)*S*.20,y=H-15-S*1.12-row*S*2.15,angle=(rand()-.5)*2.4;bears.push(makeBear(x,y,angle,flavors[palette[i]],i))}
+ // Arrive as a pile, not an empty loading screen. Reset is deterministic.
+ for(let i=0;i<(reducedMotion?480:155);i++)step(STEP);for(const b of bears)for(const n of b.nodes){n.vx*=.1;n.vy*=.1}accumulator=0;draw();status.textContent='Soft, squishy & a little unpredictable.';hint.style.opacity=interacted?'0':'1';
+}
+function resize(){const r=canvas.getBoundingClientRect();if(Math.abs(W-r.width)<1&&Math.abs(H-r.height)<1&&DPR===Math.min(devicePixelRatio||1,2))return;W=r.width;H=r.height;DPR=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(W*DPR);canvas.height=Math.round(H*DPR);reset()}
+function point(e){const r=canvas.getBoundingClientRect();return {x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height}}
+function pick(x,y){for(let i=bears.length-1;i>=0;i--){const b=bears[i];if(b.path&&ctx.isPointInPath(b.path,x*DPR,y*DPR))return b}return null}
+function attach(b,x,y){const entries=b.nodes.map((n,i)=>({i,d:Math.hypot(x-n.x,y-n.y)})).sort((a,b)=>a.d-b.d).slice(0,3);let total=0;for(const t of entries){const n=b.nodes[t.i],dx=x-n.x,dy=y-n.y;t.w=1/(t.d*t.d+S*S*.016);total+=t.w;t.ox=dx*n.co+dy*n.si;t.oy=-dx*n.si+dy*n.co}for(const t of entries)t.w/=total;return entries}
+canvas.addEventListener('pointerdown',e=>{if(e.button!==0&&e.pointerType==='mouse')return;const p=point(e),b=pick(p.x,p.y);if(!b)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);interacted=true;hint.style.opacity='0';bears.splice(bears.indexOf(b),1);bears.push(b);selected=bears.length-1;grabs.set(e.pointerId,{b,...p,attach:attach(b,p.x,p.y),lastX:p.x,lastY:p.y,time:e.timeStamp,vx:0,vy:0});canvas.classList.add('grabbing');canvas.style.cursor='grabbing';status.textContent=b.flavor.name[0].toUpperCase()+b.flavor.name.slice(1)+' in a bit of a stretch.'});
+canvas.addEventListener('pointermove',e=>{const p=point(e),g=grabs.get(e.pointerId);if(g){e.preventDefault();const dt=Math.max(.008,Math.min(.08,(e.timeStamp-g.time)/1000));g.vx=g.vx*.35+(p.x-g.x)/dt*.65;g.vy=g.vy*.35+(p.y-g.y)/dt*.65;g.x=Math.max(0,Math.min(W,p.x));g.y=Math.max(0,Math.min(H,p.y));g.time=e.timeStamp}else if(e.pointerType==='mouse'){canvas.style.cursor=pick(p.x,p.y)?'grab':'default'}});
+function release(e,cancel=false){const g=grabs.get(e.pointerId);if(!g)return;if(!cancel&&e.timeStamp-g.time<90){const vx=Math.max(-1900,Math.min(1900,g.vx)),vy=Math.max(-1900,Math.min(1900,g.vy));for(const n of g.b.nodes){n.vx=n.vx*.45+vx*.55;n.vy=n.vy*.45+vy*.55}}grabs.delete(e.pointerId);if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);if(!grabs.size){canvas.classList.remove('grabbing');status.textContent=cancel?'Ready for another squish.':'A very sweet release.';canvas.style.cursor='grab'}}
+canvas.addEventListener('pointerup',e=>release(e));canvas.addEventListener('pointercancel',e=>release(e,true));canvas.addEventListener('lostpointercapture',e=>release(e,true));
+document.getElementById('reset').addEventListener('click',()=>{interacted=false;reset()});
+canvas.addEventListener('keydown',e=>{if(e.key.toLowerCase()==='r'){reset();e.preventDefault();return}if(e.code==='Space'){selected=(selected+1)%bears.length;e.preventDefault();status.textContent=bears[selected].flavor.name+' selected. Use arrow keys to toss.';return}if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key))return;e.preventDefault();const b=bears[selected];for(const n of b.nodes){n.vx+=e.key==='ArrowLeft'?-360:e.key==='ArrowRight'?360:0;n.vy+=e.key==='ArrowDown'?450:-450}interacted=true;hint.style.opacity='0';status.textContent='A little keyboard-powered chaos.'});
+window.addEventListener('blur',()=>{grabs.clear();canvas.classList.remove('grabbing');canvas.style.cursor='grab'});document.addEventListener('visibilitychange',()=>{last=0;accumulator=0;if(document.hidden)grabs.clear()});
+function makeGelTexture(outline,color,N=256){
+ const cv=document.createElement('canvas');cv.width=N;cv.height=Math.round(N*1.4);const h=cv.height,c=cv.getContext('2d'),image=c.createImageData(N,h),data=image.data,rangeX=1.85,rangeY=2.59,unit=N/rangeX;
+ let m,dist,z;const cached=makeGelTexture.field;if(cached&&cached.N===N){({m,dist,z}=cached)}else{
+ const mask=document.createElement('canvas');mask.width=N;mask.height=h;const mc=mask.getContext('2d');mc.translate(N/2,h/2);mc.scale(unit,unit);const path=new Path2D();for(const q of outline){const v=q.slice(1);if(q[0]==='M')path.moveTo(...v);else if(q[0]==='C')path.bezierCurveTo(...v);else if(q[0]==='Q')path.quadraticCurveTo(...v);else path.closePath()}mc.fill(path);m=mc.getImageData(0,0,N,h).data;dist=new Float32Array(N*h);z=new Float32Array(N*h);
+ const edge=[];let prev=[0,-.88];for(const cmd of outline){const type=cmd[0],q=cmd.slice(1),start=prev.slice();if(type==='M'){prev=q;continue}if(type==='Z')continue;for(let s=1;s<=24;s++){const t=s/24,u=1-t;let p;if(type==='C')p=[u*u*u*start[0]+3*u*u*t*q[0]+3*u*t*t*q[2]+t*t*t*q[4],u*u*u*start[1]+3*u*u*t*q[1]+3*u*t*t*q[3]+t*t*t*q[5]];else p=[u*u*start[0]+2*u*t*q[0]+t*t*q[2],u*u*start[1]+2*u*t*q[1]+t*t*q[3]];edge.push([prev[0],prev[1],p[0]-prev[0],p[1]-prev[1]]);prev=p}}
+ for(let i=0;i<dist.length;i++)dist[i]=m[i*4+3]>127?10000:0;
+ for(let y=1;y<h-1;y++)for(let x=1;x<N-1;x++){const i=y*N+x;dist[i]=Math.min(dist[i],dist[i-1]+1,dist[i-N]+1,dist[i-N-1]+1.414,dist[i-N+1]+1.414)}
+ for(let y=h-2;y>0;y--)for(let x=N-2;x>0;x--){const i=y*N+x;dist[i]=Math.min(dist[i],dist[i+1]+1,dist[i+N]+1,dist[i+N-1]+1.414,dist[i+N+1]+1.414)}
+ function dome(x,y,cx,cy,rx,ry,amp){return amp*Math.exp(-2.2*(((x-cx)/rx)**2+((y-cy)/ry)**2))}
+ for(let y=0;y<h;y++)for(let x=0;x<N;x++){const i=y*N+x;if(!dist[i])continue;const px=(x-N/2)/unit,py=(y-h/2)/unit;let exact=100;for(const e of edge){const dx=px-e[0],dy=py-e[1],t=Math.max(0,Math.min(1,(dx*e[2]+dy*e[3])/(e[2]*e[2]+e[3]*e[3])));exact=Math.min(exact,(dx-t*e[2])**2+(dy-t*e[3])**2)}const d=Math.min(1,Math.sqrt(exact)/.18);let v=.20*Math.sqrt(1-(1-d)**2);v+=dome(px,py,0,-.53,.55,.44,.075)+dome(px,py,0,.29,.33,.47,.07)+dome(px,py,0,-.39,.24,.17,.055);for(const sign of [-1,1]){v+=dome(px,py,sign*.53,.015,.22,.24,.045)+dome(px,py,sign*.32,.82,.22,.17,.065);v+=dome(px,py,sign*.37,-.88,.10,.105,-.037);v+=dome(px,py,sign*.17,-.60,.040,.048,-.026)}const belly=Math.sqrt((px/.285)**2+((py-.29)/.405)**2);v+=.023*Math.exp(-(((belly-.96)/.12)**2));v+=dome(px,py,0,-.43,.076,.05,.035);let md=10;for(const side of [-1,1]){const cx=side*.045,cy=-.35,dx=px-cx,dy=py-cy;if(dy>0&&Math.abs(dx)<.05)md=Math.min(md,Math.abs(Math.hypot(dx,dy)-.05))}md=Math.min(md,Math.hypot(px,py-Math.max(-.39,Math.min(-.35,py))));v-=.012*Math.exp(-((md/.012)**2));z[i]=v;}
+ makeGelTexture.field={N,m,dist,z};}
+ for(let y=1;y<h-1;y++)for(let x=1;x<N-1;x++){const i=y*N+x;if(!dist[i])continue;const px=(x-N/2)/unit,py=(y-h/2)/unit;let nx=-(z[i+1]-z[i-1])*unit/2,ny=-(z[i+N]-z[i-N])*unit/2,nz=1;const len=Math.hypot(nx,ny,nz);nx/=len;ny/=len;nz/=len;const diffuse=Math.max(0,nx*-.43+ny*-.55+nz*.715),spec=Math.pow(Math.max(0,nx*-.235+ny*-.30+nz*.924),90),wide=Math.pow(Math.max(0,nx*-.235+ny*-.30+nz*.924),15),rim=Math.pow(Math.max(0,nx*.65+ny*.48+nz*.59),35);const thick=.35+z[i]*3.1;const shade=.71+.34*diffuse;
+ // Beer-Lambert body tint, rim transmission, and two broad studio reflections.
+ let alpha=Math.min(.96,.60+.20*(1-nz)+spec*.34+wide*.07);for(let k=0;k<3;k++){let trans=Math.pow(color[k],thick);let v=trans*shade+spec*.84+wide*.045+rim*.22;v+=Math.pow(1-nz,3)*(.14+color[k]*.13);data[i*4+k]=Math.round(Math.min(1,v)*255)}data[i*4+3]=Math.min(255,Math.round(alpha*255*m[i*4+3]/255));
+ }
+ c.putImageData(image,0,0);return cv;
+}
+
+// A code-made optical material on a deforming skin. The small height field is
+// generated once; the GPU only draws the resulting translucent, lit mesh.
+function createGelRenderer(){
+ const surface=document.createElement('canvas');surface.setAttribute('aria-hidden','true');Object.assign(surface.style,{position:'absolute',inset:'0',width:'100%',height:'100%',pointerEvents:'none',zIndex:'0'});canvas.style.position='relative';canvas.style.zIndex='1';hint.style.zIndex='2';
+ const gl=surface.getContext('webgl',{alpha:true,antialias:false,depth:false,stencil:false,premultipliedAlpha:true,powerPreference:'high-performance'});if(!gl)return null;
+ const vertex='attribute vec2 position; attribute vec2 uv; uniform vec2 resolution; varying vec2 tex; void main(){vec2 p=position/resolution*2.0-1.0;gl_Position=vec4(p.x,-p.y,0.0,1.0);tex=uv;}';
+ const fragment='precision mediump float; varying vec2 tex; uniform sampler2D material; void main(){gl_FragColor=texture2D(material,tex);}';
+ function shader(type,code){const s=gl.createShader(type);gl.shaderSource(s,code);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s}
+ const program=gl.createProgram();gl.attachShader(program,shader(gl.VERTEX_SHADER,vertex));gl.attachShader(program,shader(gl.FRAGMENT_SHADER,fragment));gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(program));gl.useProgram(program);
+ const N=320,TH=Math.round(N*1.4),atlas=document.createElement('canvas');atlas.width=1024;atlas.height=2048;const ac=atlas.getContext('2d');const rgb=[[1,.08,.27],[1,.36,.015],[1,.82,.03],[.045,.68,.35],[.45,.12,.85],[.05,.65,.85]];
+ for(let i=0;i<6;i++)ac.drawImage(makeGelTexture(outline,rgb[i],N),(i%3)*N,Math.floor(i/3)*TH);ac.save();ac.beginPath();ac.rect(0,TH*2,N,TH);ac.clip();ac.translate(N/2,TH*2+TH/2);ac.scale(N/1.85/77,N/1.85/77);ac.drawImage(shadow,-80,-108);ac.restore();
+ const texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,atlas);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+ const NX=12,NY=18,meshCount=(NX+1)*(NY+1),verticesPer=meshCount*2,vertices=new Float32Array(15*verticesPer*4),rest=[],cells=[];
+ for(let y=0;y<=NY;y++)for(let x=0;x<=NX;x++){const px=(x/NX-.5)*1.85,py=(y/NY-.5)*2.59;rest.push({x:px,y:py,w:weights(px,py)})}
+ // Cull fully transparent grid cells before uploading the immutable topology.
+ const mask=makeGelTexture.field.m;for(let y=0;y<NY;y++)for(let x=0;x<NX;x++){let occupied=false;for(let py=Math.max(0,Math.floor(y/NY*TH)-10);py<Math.min(TH,(y+1)/NY*TH+10)&&!occupied;py+=2)for(let px=Math.max(0,Math.floor(x/NX*N)-10);px<Math.min(N,(x+1)/NX*N+10);px+=2){if(mask[(py*N+px)*4+3]>0){occupied=true;break}}if(occupied)cells.push([x,y])}
+ const indexPer=cells.length*12,indices=new Uint16Array(15*indexPer);let offset=0;for(let b=0;b<15;b++)for(let part=0;part<2;part++){const base=b*verticesPer+part*meshCount;for(const [x,y]of cells){const a=base+y*(NX+1)+x;indices.set([a,a+1,a+NX+2,a,a+NX+2,a+NX+1],offset);offset+=6}}
+ const vb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vb);gl.bufferData(gl.ARRAY_BUFFER,vertices.byteLength,gl.DYNAMIC_DRAW);const ib=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,indices,gl.STATIC_DRAW);
+ for(const [name,size,off]of [['position',2,0],['uv',2,8]]){const a=gl.getAttribLocation(program,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,size,gl.FLOAT,false,16,off)}const res=gl.getUniformLocation(program,'resolution');gl.uniform1i(gl.getUniformLocation(program,'material'),0);gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);gl.clearColor(0,0,0,0);
+ surface.addEventListener('webglcontextlost',e=>{e.preventDefault();surface.style.display='none';gel=null});canvas.parentNode.insertBefore(surface,canvas);
+ return {draw(){if(surface.width!==canvas.width||surface.height!==canvas.height){surface.width=canvas.width;surface.height=canvas.height;gl.viewport(0,0,surface.width,surface.height)}gl.uniform2f(res,W,H);let o=0;
+  for(const b of bears){const flavor=flavors.indexOf(b.flavor),ux=(flavor%3)*N,uy=Math.floor(flavor/3)*TH,base=o,bodyBase=o+meshCount*4;
+   for(let i=0;i<rest.length;i++){const r=rest[i];let px=0,py=0;for(const t of r.w){const n=b.nodes[t.i],a=anatomy[t.i],dx=(r.x-a[0])*S,dy=(r.y-a[1])*S;px+=t.w*(n.x+n.co*dx-n.si*dy);py+=t.w*(n.y+n.si*dx+n.co*dy)}const u=(i%(NX+1))/NX*N,v=Math.floor(i/(NX+1))/NY*TH,j=base+i*4,k=bodyBase+i*4;vertices[j]=px+3;vertices[j+1]=py+S*.065;vertices[j+2]=u/1024;vertices[j+3]=(TH*2+v)/2048;vertices[k]=px;vertices[k+1]=py;vertices[k+2]=(ux+u)/1024;vertices[k+3]=(uy+v)/2048}o+=verticesPer*4;
+   b.path=pathFor(b);
+  }gl.clear(gl.COLOR_BUFFER_BIT);gl.bindBuffer(gl.ARRAY_BUFFER,vb);gl.bufferSubData(gl.ARRAY_BUFFER,0,vertices.subarray(0,o));gl.drawElements(gl.TRIANGLES,bears.length*indexPer,gl.UNSIGNED_SHORT,0);
+ }};
+}
+
+try{gel=createGelRenderer()}catch(e){console.warn('Using the Canvas candy renderer:',e.message)}
+new ResizeObserver(resize).observe(canvas);window.addEventListener('resize',resize);resize();
+function frame(t){if(!last)last=t;accumulator+=Math.min((t-last)/1000,.05);last=t;let n=0;while(accumulator>=STEP&&n<6){step(STEP);accumulator-=STEP;n++}if(n===6)accumulator=0;draw();requestAnimationFrame(frame)}requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

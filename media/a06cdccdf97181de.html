@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Spark Rack — Local AI Cluster (WebGL)</title>
+<style>
+  :root{
+    --ink:#e8ecf1; --dim:#9aa7b5; --accent:#ffd27a; --cable:#59e6ff;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; overflow:hidden; background:#07090d; }
+  body{
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color:var(--ink);
+  }
+  #stage{ position:fixed; inset:0; }
+  #gl{ position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; cursor:grab; }
+  #gl.dragging{ cursor:grabbing; }
+
+  /* ---------- 3D-anchored labels ---------- */
+  #labels{ position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+  .label{
+    position:absolute; transform:translate(-50%,-130%);
+    background:rgba(10,14,20,.72); border:1px solid rgba(255,210,122,.28);
+    border-radius:7px; padding:4px 9px 5px; text-align:center;
+    backdrop-filter:blur(3px); white-space:nowrap;
+    transition:opacity .45s ease;
+  }
+  .label .name{
+    font-size:11px; font-weight:650; letter-spacing:.14em; color:var(--accent);
+    display:flex; align-items:center; gap:6px; justify-content:center;
+  }
+  .label .sub{ font-size:9px; letter-spacing:.18em; color:var(--dim); margin-top:1px; }
+  .label .dot{
+    width:6px; height:6px; border-radius:50%; background:var(--cable);
+    box-shadow:0 0 6px var(--cable); animation:blink 1.6s ease-in-out infinite;
+  }
+  @keyframes blink{ 0%,100%{opacity:1} 50%{opacity:.25} }
+  .label.standby{ opacity:.42; }
+  .label.standby .dot{ background:#5b6672; box-shadow:none; animation:none; }
+  .label.standby .name{ color:#aab4bf; }
+
+  /* ---------- UI chrome ---------- */
+  #hud{ position:absolute; inset:0; pointer-events:none; }
+  .card{
+    position:absolute; top:18px; left:20px; padding:12px 16px 13px;
+    background:rgba(10,14,20,.66); border:1px solid rgba(255,255,255,.09);
+    border-radius:10px; backdrop-filter:blur(4px);
+  }
+  .card h1{ font-size:14px; font-weight:750; letter-spacing:.22em; }
+  .card h1 em{ font-style:normal; color:var(--accent); }
+  .card p{ font-size:10.5px; letter-spacing:.12em; color:var(--dim); margin-top:4px; }
+  #mode-badge{
+    display:inline-block; margin-top:7px; font-size:9.5px; font-weight:700; letter-spacing:.22em;
+    padding:3px 8px; border-radius:4px; color:#062026;
+    background:linear-gradient(90deg,#59e6ff,#9ff5ff); transition:background .4s;
+  }
+  #mode-badge.ring{ background:linear-gradient(90deg,#ffd27a,#ffe9b3); color:#2b1c02; }
+
+  #hint{
+    position:absolute; top:18px; right:20px; text-align:right;
+    font-size:10px; letter-spacing:.14em; color:var(--dim); line-height:1.8;
+    background:rgba(10,14,20,.5); border:1px solid rgba(255,255,255,.07);
+    padding:8px 12px; border-radius:10px; backdrop-filter:blur(4px);
+  }
+  #hint b{ color:var(--ink); font-weight:600; }
+
+  #controls{ position:absolute; left:50%; bottom:26px; transform:translateX(-50%); pointer-events:auto; }
+  #toggle{
+    font:inherit; font-size:12px; font-weight:700; letter-spacing:.18em;
+    color:#1a1204; background:linear-gradient(180deg,#ffd97e,#f2b64a);
+    border:1px solid #ffe3a6; border-radius:999px; padding:11px 22px;
+    cursor:pointer; box-shadow:0 4px 18px rgba(242,182,74,.35), inset 0 1px 0 rgba(255,255,255,.5);
+    transition:transform .12s ease, box-shadow .2s ease;
+  }
+  #toggle:hover{ transform:translateY(-1px); box-shadow:0 7px 22px rgba(242,182,74,.45), inset 0 1px 0 rgba(255,255,255,.5); }
+  #toggle:active{ transform:translateY(1px); }
+  #toggle:focus-visible{ outline:2px solid #9ff5ff; outline-offset:3px; }
+  #toggle .k{
+    display:inline-block; margin-left:9px; padding:1px 6px; border-radius:4px;
+    font-size:9px; letter-spacing:.1em; background:rgba(0,0,0,.22); color:#fff4dc;
+  }
+  #err{
+    position:absolute; inset:0; display:none; place-items:center; text-align:center;
+    color:var(--dim); font-size:13px; letter-spacing:.08em; padding:30px;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="gl" aria-label="Interactive 3D scene: four gold AI compute boxes on a wooden table, connected by glowing cables. Drag to orbit, scroll to zoom, button or T key toggles ring versus switch topology."></canvas>
+  <div id="labels" aria-hidden="true"></div>
+  <div id="hud">
+    <div class="card">
+      <h1>SPARK <em>RACK</em></h1>
+      <p>4× GOLDEN SPARK NODES · LOCAL FABRIC</p>
+      <span id="mode-badge">SWITCH TOPOLOGY</span>
+    </div>
+    <div id="hint">
+      <b>DRAG</b> · ORBIT CAMERA<br>
+      <b>SCROLL / PINCH</b> · ZOOM<br>
+      <b>T</b> · TOGGLE FABRIC
+    </div>
+    <div id="controls">
+      <button id="toggle" type="button" aria-pressed="false"
+              aria-label="Toggle network topology between ring and switch">
+        RE-ROUTE → SWITCH TOPOLOGY<span class="k">T</span>
+      </button>
+    </div>
+    <div id="err"><div>WebGL is unavailable in this browser.<br>The Spark Rack needs GPU (or software) rendering to run.</div></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =========================================================================
+   SPARK RACK — raw WebGL, zero dependencies, zero external assets.
+   Four gold AI boxes on a procedural wooden table, glowing cable tubes
+   with travelling data pulses, orbit camera, ring <-> switch re-routing.
+   ========================================================================= */
+
+(function(){
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl', {antialias:true, alpha:false})
+        || canvas.getContext('experimental-webgl', {antialias:true, alpha:false});
+if(!gl){ document.getElementById('err').style.display='grid'; return; }
+
+/* ---------------- tiny math ---------------- */
+const M4 = {
+  ident(){ return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); },
+  translate(m,x,y,z){ const o=m.slice(); o[12]=m[0]*x+m[4]*y+m[8]*z+m[12]; o[13]=m[1]*x+m[5]*y+m[9]*z+m[13]; o[14]=m[2]*x+m[6]*y+m[10]*z+m[14]; return o; },
+  mul(a,b){ const o=new Float32Array(16);
+    for(let c=0;c<4;c++) for(let r=0;r<4;r++){
+      o[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];
+    } return o; },
+  persp(fovy,asp,n,f){ const t=1/Math.tan(fovy/2), o=new Float32Array(16);
+    o[0]=t/asp; o[5]=t; o[10]=(f+n)/(n-f); o[11]=-1; o[14]=2*f*n/(n-f); return o; },
+  lookAt(e,c,u){
+    let zx=e[0]-c[0], zy=e[1]-c[1], zz=e[2]-c[2];
+    let l=Math.hypot(zx,zy,zz); zx/=l; zy/=l; zz/=l;
+    let xx=u[1]*zz-u[2]*zy, xy=u[2]*zx-u[0]*zz, xz=u[0]*zy-u[1]*zx;
+    l=Math.hypot(xx,xy,xz)||1; xx/=l; xy/=l; xz/=l;
+    const yx=zy*xz-zz*xy, yy=zz*xx-zx*xz, yz=zx*xy-zy*xx;
+    return new Float32Array([ xx,yx,zx,0, xy,yy,zy,0, xz,yz,zz,0,
+      -(xx*e[0]+xy*e[1]+xz*e[2]), -(yx*e[0]+yy*e[1]+yz*e[2]), -(zx*e[0]+zy*e[1]+zz*e[2]), 1 ]);
+  }
+};
+const lerp=(a,b,t)=>a+(b-a)*t;
+const ease=t=>t<.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2;
+function mulberry32(s){ return function(){ s|=0; s=s+0x6D2B79F5|0; let t=Math.imul(s^s>>>15,1|s); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+
+/* ---------------- shaders ---------------- */
+function sh(type,src){
+  const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error('shader: '+gl.getShaderInfoLog(s));
+  return s;
+}
+function prog(vs,fs){
+  const p=gl.createProgram();
+  gl.attachShader(p,sh(gl.VERTEX_SHADER,vs)); gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error('link: '+gl.getProgramInfoLog(p));
+  const u={}, a={};
+  const nu=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);
+  for(let i=0;i<nu;i++){ const inf=gl.getActiveUniform(p,i); u[inf.name.replace('[0]','')]=gl.getUniformLocation(p,inf.name); }
+  const na=gl.getProgramParameter(p,gl.ACTIVE_ATTRIBUTES);
+  for(let i=0;i<na;i++){ const inf=gl.getActiveAttrib(p,i); a[inf.name]=gl.getAttribLocation(p,inf.name); }
+  return {p,u,a};
+}
+
+/* lit mesh shader (boxes, table, panels, LEDs, shadows share the vertex layout) */
+const meshProg = prog(`
+  attribute vec3 aPos; attribute vec3 aNor; attribute vec2 aUV;
+  uniform mat4 uProj, uView, uModel;
+  varying vec3 vN; varying vec3 vW; varying vec2 vUV;
+  void main(){
+    vec4 w = uModel * vec4(aPos,1.0);
+    vW = w.xyz; vN = mat3(uModel[0].xyz,uModel[1].xyz,uModel[2].xyz) * aNor; vUV = aUV;
+    gl_Position = uProj * uView * w;
+  }`,`
+  precision mediump float;
+  varying vec3 vN; varying vec3 vW; varying vec2 vUV;
+  uniform vec3 uColor; uniform vec3 uEye;
+  uniform float uShin, uSpec, uEmis;
+  uniform vec3 uEmisColor;
+  uniform float uUseTex; uniform sampler2D uTex;
+  const vec3 LDIR = vec3(0.452, 0.855, 0.302);   /* pre-normalised key light */
+  void main(){
+    vec3 n = normalize(vN);
+    vec3 v = normalize(uEye - vW);
+    vec3 albedo = uColor;
+    if(uUseTex > 0.5) albedo *= texture2D(uTex, vUV).rgb;
+    vec3 amb = mix(vec3(0.16,0.14,0.13), vec3(0.34,0.38,0.46), n.y*0.5+0.5);
+    float dif = max(dot(n, LDIR), 0.0);
+    vec3 h = normalize(LDIR + v);
+    float sp = pow(max(dot(n,h),0.0), uShin) * uSpec;
+    float rim = pow(1.0 - max(dot(n,v),0.0), 3.0);
+    vec3 lit = albedo*(amb + vec3(1.05,0.98,0.88)*dif) + vec3(1.0,0.97,0.9)*sp
+             + vec3(1.0,0.78,0.42)*rim*0.28*uSpec;
+    vec3 col = mix(lit, uEmisColor, uEmis);
+    gl_FragColor = vec4(col, 1.0);
+  }`);
+
+/* cable tube shader — core + additive halo passes, pulses baked into t */
+const cableProg = prog(`
+  attribute vec3 aPos; attribute vec3 aNor; attribute float aT;
+  uniform mat4 uProj, uView;
+  uniform float uRadius;
+  varying vec3 vT; varying float vTub;
+  void main(){
+    vT = aPos; vTub = aT;
+    gl_Position = uProj * uView * vec4(aPos + aNor * uRadius, 1.0);
+  }`,`
+  precision mediump float;
+  varying vec3 vT; varying float vTub;
+  uniform float uA, uB, uC;     /* pulse positions along tube (t-space) */
+  uniform float uBoost, uHalo;
+  void main(){
+    float d = 1.0;
+    float d0 = abs(fract(vTub - uA + 0.5) - 0.5); d = min(d,d0);
+    float d1 = abs(fract(vTub - uB + 0.5) - 0.5); d = min(d,d1);
+    float d2 = abs(fract(vTub - uC + 0.5) - 0.5); d = min(d,d2);
+    float core = exp(-d*d*900.0);
+    float soft = exp(-d*d*60.0);
+    vec3 base = vec3(0.10,0.46,0.56);
+    vec3 hot  = vec3(0.62,1.0,1.0);
+    vec3 col = base*(1.15 + 0.30*sin(vTub*40.0)) + hot*(core*1.6 + soft*0.30)*uBoost;
+    float a = uHalo > 0.5 ? (0.16 + core*0.85 + soft*0.22)*uBoost : 0.96;
+    gl_FragColor = vec4(col, a);
+  }`);
+
+/* soft shadow blob */
+const shadowProg = prog(`
+  attribute vec3 aPos; attribute vec2 aUV;
+  uniform mat4 uProj, uView, uModel;
+  varying vec2 vUV;
+  void main(){ vUV=aUV; gl_Position = uProj*uView*uModel*vec4(aPos,1.0); }`,`
+  precision mediump float; varying vec2 vUV;
+  uniform sampler2D uTex; uniform float uAlpha;
+  void main(){ gl_FragColor = vec4(0.0,0.0,0.0, texture2D(uTex,vUV).a * uAlpha); }`);
+
+/* fullscreen background gradient + vignette */
+const bgProg = prog(`
+  attribute vec2 aPos; varying vec2 vP;
+  void main(){ vP=aPos; gl_Position=vec4(aPos,0.9999,1.0); }`,`
+  precision mediump float; varying vec2 vP;
+  void main(){
+    vec3 top = vec3(0.055,0.075,0.105);
+    vec3 mid = vec3(0.030,0.036,0.050);
+    vec3 bot = vec3(0.012,0.013,0.018);
+    float t = vP.y*0.5+0.5;
+    vec3 col = mix(bot, mid, smoothstep(0.0,0.55,t));
+    col = mix(col, top, smoothstep(0.55,1.0,t));
+    float vig = 1.0 - 0.42*dot(vP*vec2(0.75,0.9), vP*vec2(0.75,0.9));
+    gl_FragColor = vec4(col*vig, 1.0);
+  }`);
+
+/* ---------------- geometry helpers ---------------- */
+function makeBox(w,h,d,uvTop){ /* axis-aligned box, centered at origin, y in [-h/2, h/2] */
+  const x=w/2, y=h/2, z=d/2;
+  const P=[], N=[], UV=[], I=[];
+  const faces=[
+    { n:[ 1,0,0], c:[[ x,-y,-z],[ x, y,-z],[ x, y, z],[ x,-y, z]] },
+    { n:[-1,0,0], c:[[-x,-y, z],[-x, y, z],[-x, y,-z],[-x,-y,-z]] },
+    { n:[0, 1,0], c:[[-x, y,-z],[-x, y, z],[ x, y, z],[ x, y,-z]] },
+    { n:[0,-1,0], c:[[-x,-y, z],[-x,-y,-z],[ x,-y,-z],[ x,-y, z]] },
+    { n:[0,0, 1], c:[[-x,-y, z],[ x,-y, z],[ x, y, z],[-x, y, z]] },
+    { n:[0,0,-1], c:[[ x,-y,-z],[-x,-y,-z],[-x, y,-z],[ x, y,-z]] },
+  ];
+  faces.forEach((f,fi)=>{
+    const b=P.length/3;
+    for(let i=0;i<4;i++){
+      P.push(f.c[i][0],f.c[i][1],f.c[i][2]); N.push(f.n[0],f.n[1],f.n[2]);
+      if(uvTop && fi===2){ UV.push((f.c[i][0]+4)/8*4.0, (f.c[i][2]+3)/6*3.0); }
+      else UV.push(0.5,0.5);
+    }
+    I.push(b,b+1,b+2, b,b+2,b+3);
+  });
+  return {P,N,UV,I};
+}
+function makeQuad(w,d){ /* horizontal quad centered at origin, normal +y */
+  const x=w/2,z=d/2;
+  return { P:[-x,0,-z,  -x,0,z,  x,0,z,  x,0,-z], N:[0,1,0, 0,1,0, 0,1,0, 0,1,0],
+           UV:[0,0, 0,1, 1,1, 1,0], I:[0,1,2, 0,2,3] };
+}
+function upload(g, dynamic){
+  const inter=[];
+  for(let i=0;i<g.P.length/3;i++){ inter.push(g.P[i*3],g.P[i*3+1],g.P[i*3+2], g.N[i*3],g.N[i*3+1],g.N[i*3+2], g.UV[i*2],g.UV[i*2+1]); }
+  const vbo=gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,vbo);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(inter), dynamic?gl.DYNAMIC_DRAW:gl.STATIC_DRAW);
+  const ibo=gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(g.I), dynamic?gl.DYNAMIC_DRAW:gl.STATIC_DRAW);
+  return {vbo,ibo,count:g.I.length,stride:8};
+}
+
+/* procedural wood texture */
+function woodTexture(){
+  const c=document.createElement('canvas'); c.width=1024; c.height=512;
+  const x=c.getContext('2d'); const rnd=mulberry32(1337);
+  x.fillStyle='#7c5228'; x.fillRect(0,0,1024,512);
+  const planks=8, ph=512/planks;
+  for(let p=0;p<planks;p++){
+    const base=0.85+rnd()*0.3;
+    x.fillStyle=`rgb(${Math.round(118*base)},${Math.round(78*base)},${Math.round(40*base)})`;
+    x.fillRect(0,p*ph,1024,ph);
+    /* grain */
+    for(let g=0; g<46; g++){
+      const y0=p*ph+rnd()*ph; const amp=2+rnd()*7; const dark=rnd()<0.62;
+      x.strokeStyle=dark?`rgba(46,26,10,${0.05+rnd()*0.11})`:`rgba(220,180,120,${0.04+rnd()*0.07})`;
+      x.lineWidth=0.6+rnd()*1.8; x.beginPath(); x.moveTo(0,y0);
+      for(let s=1;s<=8;s++){ x.lineTo(s*128, y0+Math.sin(s*1.7+p*3+g)*amp*(rnd()*0.7+0.4)); }      x.stroke();
+    }
+    /* occasional knot */
+    if(rnd()<0.5){
+      const kx=rnd()*1024, ky=p*ph+ph*(0.25+rnd()*0.5);
+      const rg=x.createRadialGradient(kx,ky,1,kx,ky,10+rnd()*14);
+      rg.addColorStop(0,'rgba(38,20,8,0.75)'); rg.addColorStop(1,'rgba(38,20,8,0)');
+      x.fillStyle=rg; x.beginPath(); x.ellipse(kx,ky,16,9,0,0,7); x.fill();
+    }
+    /* seam */
+    x.fillStyle='rgba(20,10,4,0.65)'; x.fillRect(0,p*ph,1024,2);
+    x.fillStyle='rgba(255,220,170,0.10)'; x.fillRect(0,p*ph+2,1024,1);
+  }
+  /* fine noise */
+  for(let i=0;i<9000;i++){
+    x.fillStyle=`rgba(${rnd()<0.5?0:255},${rnd()<0.5?0:220},120,${0.018+rnd()*0.02})`;
+    x.fillRect(rnd()*1024, rnd()*512, 1+rnd()*2, 1+rnd()*2);
+  }
+  const t=gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D,t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,1);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,c);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.REPEAT);
+  return t;
+}
+function blobTexture(){
+  const c=document.createElement('canvas'); c.width=c.height=256;
+  const x=c.getContext('2d');
+  const g=x.createRadialGradient(128,128,8,128,128,126);
+  g.addColorStop(0,'rgba(0,0,0,0.62)'); g.addColorStop(0.55,'rgba(0,0,0,0.30)'); g.addColorStop(1,'rgba(0,0,0,0)');
+  x.fillStyle=g; x.fillRect(0,0,256,256);
+  const t=gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D,t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,1);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,c);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  return t;
+}
+const woodTex=woodTexture(), blobTex=blobTexture();
+
+/* ---------------- scene construction ---------------- */
+const nodes=[ {x:-1.65,z:-1.05}, {x:1.65,z:-1.05}, {x:1.65,z:1.05}, {x:-1.65,z:1.05} ];
+const NW=0.95, NH=1.15, ND=0.8;          /* gold node box dims */
+const SW=1.15, SH=0.55, SD=0.85;         /* central switch dims */
+
+const drawList=[];  /* {mesh, model, color, shin, spec, emis, emisColor, tex} */
+function addMesh(g, tx,ty,tz, opts){
+  drawList.push(Object.assign({mesh:upload(g,false), model:M4.translate(M4.ident(),tx,ty,tz),
+    color:[1,1,1], shin:24, spec:0.2, emis:0, emisColor:[0,0,0], tex:null}, opts));
+}
+
+/* table slab + legs */
+const tableG=makeBox(7.2,0.35,4.6,true);
+addMesh(tableG, 0,-0.175,0, {tex:woodTex, color:[1,1,1], shin:9, spec:0.14});
+const legG=makeBox(0.28,2.4,0.28,false);
+[[-3.1,-1.95],[3.1,-1.95],[3.1,1.95],[-3.1,1.95]].forEach(([lx,lz])=>{
+  addMesh(legG, lx,-1.55,lz, {color:[0.23,0.15,0.09], shin:6, spec:0.05});
+});
+
+/* gold AI nodes + dark face panel + blinking LEDs */
+const nodeG=makeBox(NW,NH,ND,false);
+const panelG=makeBox(0.52,0.55,0.03,false);
+const ledG=makeBox(0.07,0.07,0.03,false);
+const leds=[];
+nodes.forEach((p,i)=>{
+  const front = (i<2) ? -1 : 1;               /* back nodes face -z, front nodes face +z */
+  addMesh(nodeG, p.x, NH/2, p.z, {color:[0.845,0.655,0.275], shin:52, spec:0.95});
+  addMesh(panelG, p.x, 0.62, p.z + front*(ND/2-0.005), {color:[0.075,0.075,0.095], shin:70, spec:0.5});
+  for(let k=0;k<3;k++){
+    const lx=p.x-0.16+k*0.16;
+    addMesh(ledG, lx, 0.30, p.z + front*(ND/2-0.005), {color:[0,0,0], emis:1, emisColor:[0,1,0.4], shin:10, spec:0});
+    leds.push({idx:drawList.length-1, phase:i*1.31+k*0.53, base:[0.15+k*0.12,1,0.35+k*0.2]});
+  }
+});
+
+/* central switch box + status strip on top */
+const switchG=makeBox(SW,SH,SD,false);
+const stripG=makeBox(0.7,0.02,0.1,false);
+addMesh(switchG, 0, SH/2, 0, {color:[0.30,0.325,0.375], shin:64, spec:0.8});
+addMesh(stripG, 0, SH+0.005, 0, {color:[0,0,0], emis:1, emisColor:[0.35,0.9,1], shin:10, spec:0});
+const switchStripIdx=drawList.length-1;
+
+/* shadow blobs */
+const blobG=makeQuad(2.4,2.0);
+const blobMesh=upload(blobG,false);
+const shadowList=[ ...nodes.map(p=>({x:p.x,z:p.z,s:1.55,a:0.8})), {x:0,z:0,s:1.5,a:0.75} ];
+
+/* ---------------- cables ---------------- */
+/* Each of the 4 cables has a ring route (node i -> node i+1) and a switch
+   route (node i -> central switch). Routes are cubic beziers; morphing
+   interpolates control points, tubes are rebuilt while morphing.          */
+function bez(p0,p1,p2,p3,t){
+  const u=1-t;
+  return [ u*u*u*p0[0]+3*u*u*t*p1[0]+3*u*t*t*p2[0]+t*t*t*p3[0],
+           u*u*u*p0[1]+3*u*u*t*p1[1]+3*u*t*t*p2[1]+t*t*t*p3[1],
+           u*u*u*p0[2]+3*u*u*t*p1[2]+3*u*t*t*p2[2]+t*t*t*p3[2] ];
+}
+function ringCtrl(i){
+  const a=nodes[i], b=nodes[(i+1)%4];
+  const alongX = Math.abs(a.z-b.z)<0.01;       /* neighbours share z? then run along x */
+  const sx=Math.sign(b.x-a.x), sz=Math.sign(b.z-a.z);
+  const out = alongX ? Math.sign(a.z)*0.62 : Math.sign(a.x)*0.62;
+  if(alongX){
+    const p0=[a.x+sx*NW/2, 0.55, a.z], p3=[b.x-sx*NW/2, 0.55, b.z];
+    return [p0, [p0[0]+sx*0.55, 0.10, p0[2]+out], [p3[0]-sx*0.55, 0.10, p3[2]+out], p3];
+  } else {
+    const p0=[a.x, 0.55, a.z+sz*ND/2], p3=[b.x, 0.55, b.z-sz*ND/2];
+    return [p0, [p0[0]+out, 0.10, p0[2]+sz*0.55], [p3[0]+out, 0.10, p3[2]-sz*0.55], p3];
+  }
+}
+function switchCtrl(i){
+  const a=nodes[i];
+  const ix=-Math.sign(a.x);                       /* inward x direction */
+  const p0=[a.x+ix*NW/2, 0.52, a.z*0.72];         /* port on inner x-face */
+  const p3=[-ix*SW/2, 0.30, a.z*0.24];            /* port on switch face that faces this node */
+  return [p0, [p0[0]+ix*0.55, 0.09, p0[2]*0.5], [p3[0]-ix*0.42, 0.09, p3[2]], p3];
+}
+const cables = nodes.map((n,i)=>({
+  ring: ringCtrl(i), sw: switchCtrl(i),
+  phase: i*0.37, vbo:null, ibo:null, count:0
+}));
+function tubeGeo(ctrl, SAMPLES=64, RADIAL=12, r=0.041){
+  /* dense bezier sample -> uniform arc-length resample */
+  const dense=[]; for(let i=0;i<=200;i++) dense.push(bez(ctrl[0],ctrl[1],ctrl[2],ctrl[3],i/200));
+  const cum=[0]; for(let i=1;i<dense.length;i++) cum.push(cum[i-1]+Math.hypot(dense[i][0]-dense[i-1][0],dense[i][1]-dense[i-1][1],dense[i][2]-dense[i-1][2]));
+  const total=cum[cum.length-1];
+  const pts=[]; let j=0;
+  for(let i=0;i<SAMPLES;i++){
+    const s=total*i/(SAMPLES-1);
+    while(j<cum.length-2 && cum[j+1]<s) j++;
+    const seg=cum[j+1]-cum[j]||1e-6, f=(s-cum[j])/seg;
+    pts.push([ lerp(dense[j][0],dense[j+1][0],f), lerp(dense[j][1],dense[j+1][1],f), lerp(dense[j][2],dense[j+1][2],f) ]);
+  }
+  /* parallel-transport frames -> tube vertices */
+  const P=[],N=[],T=[],I=[];
+  let pn=null;
+  for(let i=0;i<SAMPLES;i++){
+    const t0=pts[Math.max(0,i-1)], t1=pts[Math.min(SAMPLES-1,i+1)];
+    let tx=t1[0]-t0[0], ty=t1[1]-t0[1], tz=t1[2]-t0[2];
+    let l=Math.hypot(tx,ty,tz)||1; tx/=l; ty/=l; tz/=l;
+    let nx,ny,nz;
+    if(pn){
+      const d=tx*pn[0]+ty*pn[1]+tz*pn[2];
+      nx=pn[0]-tx*d; ny=pn[1]-ty*d; nz=pn[2]-tz*d;
+      l=Math.hypot(nx,ny,nz); if(l<1e-4){ nx=1;ny=0;nz=0;l=1; } nx/=l;ny/=l;nz/=l;
+    } else {
+      const rx=Math.abs(ty)<0.9?0:1, ry=Math.abs(ty)<0.9?1:0;   /* ref not parallel to t */
+      nx=ry*tz-0*ty; ny=0*tx-rx*tz; nz=rx*ty-ry*tx;
+      l=Math.hypot(nx,ny,nz)||1; nx/=l;ny/=l;nz/=l;
+    }
+    pn=[nx,ny,nz];
+    const bx=ty*nz-tz*ny, by=tz*nx-tx*nz, bz=tx*ny-ty*nx;
+    for(let k=0;k<RADIAL;k++){
+      const a=k/RADIAL*Math.PI*2, ca=Math.cos(a), sa=Math.sin(a);
+      const vx=ca*nx+sa*bx, vy=ca*ny+sa*by, vz=ca*nz+sa*bz;
+      P.push(pts[i][0]+vx*r, pts[i][1]+vy*r, pts[i][2]+vz*r);
+      N.push(vx, vy, vz);
+      T.push(i/(SAMPLES-1));
+    }
+  }
+  for(let i=0;i<SAMPLES-1;i++) for(let k=0;k<RADIAL;k++){
+    const a=i*RADIAL+k, b=i*RADIAL+(k+1)%RADIAL, c=(i+1)*RADIAL+(k+1)%RADIAL, d=(i+1)*RADIAL+k;
+    I.push(a,b,c, a,c,d);
+  }
+  return {P,N,T,UV:new Array(P.length/3*2).fill(0),I};
+}
+function uploadCable(c, geo){
+  const inter=[];
+  for(let i=0;i<geo.P.length/3;i++) inter.push(geo.P[i*3],geo.P[i*3+1],geo.P[i*3+2], geo.N[i*3],geo.N[i*3+1],geo.N[i*3+2], geo.T[i]);
+  if(!c.vbo){ c.vbo=gl.createBuffer(); c.ibo=gl.createBuffer(); }
+  gl.bindBuffer(gl.ARRAY_BUFFER,c.vbo);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(inter),gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,c.ibo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(geo.I),gl.DYNAMIC_DRAW);
+  c.count=geo.I.length;
+}
+function rebuildCables(morph){
+  for(const c of cables){
+    const e=ease(morph);
+    const ctrl=c.ring.map((p,k)=>[ lerp(p[0],c.sw[k][0],e), lerp(p[1],c.sw[k][1],e), lerp(p[2],c.sw[k][2],e) ]);
+    uploadCable(c, tubeGeo(ctrl));
+  }
+}
+rebuildCables(0);
+
+/* ---------------- camera + input ---------------- */
+const cam={ yaw:0.72, pitch:0.46, radius:8.8, target:[0,0.5,0], yawV:0, pitchV:0 };
+const RMIN=3.4, RMAX=15, PMIN=0.10, PMAX=1.38;
+let dragging=false, lastX=0, lastY=0;
+const pointers=new Map(); let pinchD=0;
+canvas.addEventListener('pointerdown',e=>{
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId,[e.clientX,e.clientY]);
+  if(pointers.size===1){ dragging=true; lastX=e.clientX; lastY=e.clientY; canvas.classList.add('dragging'); }
+  if(pointers.size===2){ const p=[...pointers.values()]; pinchD=Math.hypot(p[0][0]-p[1][0],p[0][1]-p[1][1]); }
+});
+canvas.addEventListener('pointermove',e=>{
+  if(!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId,[e.clientX,e.clientY]);
+  if(pointers.size===2){
+    const p=[...pointers.values()]; const d=Math.hypot(p[0][0]-p[1][0],p[0][1]-p[1][1]);
+    cam.radius=Math.min(RMAX,Math.max(RMIN, cam.radius*(pinchD/(d||1))));
+    pinchD=d; return;
+  }
+  if(!dragging) return;
+  const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
+  cam.yaw -= dx*0.0052; cam.pitch += dy*0.0042;
+  cam.pitch=Math.min(PMAX,Math.max(PMIN,cam.pitch));
+  cam.yawV=-dx*0.0052; cam.pitchV=dy*0.0042;
+});
+function endPointer(e){
+  pointers.delete(e.pointerId);
+  if(pointers.size<2) pinchD=0;
+  if(pointers.size===0){ dragging=false; canvas.classList.remove('dragging'); }
+}
+canvas.addEventListener('pointerup',endPointer);
+canvas.addEventListener('pointercancel',endPointer);
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  cam.radius=Math.min(RMAX,Math.max(RMIN, cam.radius*(1+Math.sign(e.deltaY)*0.09)));
+},{passive:false});
+
+/* ---------------- topology toggle ---------------- */
+let topo='ring';                 /* 'ring' | 'switch' */
+let morph=0, morphTarget=0, boost=0;
+const btn=document.getElementById('toggle');
+const badge=document.getElementById('mode-badge');
+const switchLabel = { el:null };
+function setTopo(t){
+  topo=t; morphTarget = (t==='switch')?1:0; boost=1.8;
+  const sw = t==='switch';
+  btn.setAttribute('aria-pressed', String(sw));
+  btn.firstChild.textContent = sw ? 'RE-ROUTE → RING TOPOLOGY' : 'RE-ROUTE → SWITCH TOPOLOGY';
+  badge.textContent = sw ? 'SWITCH TOPOLOGY' : 'RING TOPOLOGY';
+  badge.classList.toggle('ring', !sw);
+  if(switchLabel.el){
+    switchLabel.el.classList.toggle('standby', !sw);
+    switchLabel.el.querySelector('.sub').textContent = sw ? 'FABRIC · ACTIVE' : 'STANDBY · NO UPLINK';
+  }
+}
+btn.addEventListener('click',()=>setTopo(topo==='ring'?'switch':'ring'));
+/* initial UI state matches the ring scene */
+badge.textContent='RING TOPOLOGY'; badge.classList.add('ring');
+window.addEventListener('keydown',e=>{
+  if(e.code==='KeyT' && !e.repeat) setTopo(topo==='ring'?'switch':'ring');
+});
+
+/* ---------------- labels ---------------- */
+const labelDefs=[
+  ...nodes.map((p,i)=>({ pos:[p.x, NH+0.34, p.z], name:`AI·0${i+1} SPARK`, sub:'GOLD NODE · 40 TOPS' })),
+  { pos:[0, SH+0.34, 0], name:'SWITCH', sub:'STANDBY · NO UPLINK', isSwitch:true }
+];
+const labelHost=document.getElementById('labels');
+const labelEls=labelDefs.map(d=>{
+  const el=document.createElement('div'); el.className='label';
+  el.innerHTML=`<div class="name"><span class="dot"></span>${d.name}</div><div class="sub">${d.sub}</div>`;
+  labelHost.appendChild(el);
+  if(d.isSwitch){ switchLabel.el=el; el.classList.add('standby'); }
+  return el;
+});
+function updateLabels(proj,view){
+  const w=canvas.clientWidth, h=canvas.clientHeight;
+  const vp=M4.mul(proj,view);
+  labelDefs.forEach((d,i)=>{
+    const x=d.pos[0],y=d.pos[1],z=d.pos[2];
+    const cw=vp[3]*x+vp[7]*y+vp[11]*z+vp[15];
+    if(cw<=0.05){ labelEls[i].style.display='none'; return; }
+    const cx=(vp[0]*x+vp[4]*y+vp[8]*z+vp[12])/cw;
+    const cy=(vp[1]*x+vp[5]*y+vp[9]*z+vp[13])/cw;
+    const el=labelEls[i];
+    const sx=(cx*0.5+0.5)*w, sy=(-cy*0.5+0.5)*h;
+    if(sx<-80||sx>w+80||sy<-40||sy>h+40){ el.style.display='none'; return; }
+    el.style.display='block';
+    el.style.left=sx+'px';
+    el.style.top=sy+'px';
+  });
+}
+
+/* ---------------- resize ---------------- */
+function resize(){
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  const w=canvas.clientWidth, h=canvas.clientHeight;
+  if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){
+    canvas.width=Math.round(w*dpr); canvas.height=Math.round(h*dpr);
+  }
+}
+window.addEventListener('resize',resize);
+
+/* ---------------- render loop ---------------- */
+gl.enable(gl.DEPTH_TEST);
+gl.depthFunc(gl.LEQUAL);
+gl.enable(gl.CULL_FACE);
+gl.cullFace(gl.BACK);
+
+const cubePts=new Float32Array([-1,-1, 3,-1, -1,3]);   /* fullscreen tri */
+const bgBuf=gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER,bgBuf);
+gl.bufferData(gl.ARRAY_BUFFER,cubePts,gl.STATIC_DRAW);
+
+function bindMeshAttribs(pr, m){
+  gl.bindBuffer(gl.ARRAY_BUFFER,m.vbo);
+  gl.enableVertexAttribArray(pr.a.aPos);   gl.vertexAttribPointer(pr.a.aPos,3,gl.FLOAT,false,32,0);
+  gl.enableVertexAttribArray(pr.a.aNor);   gl.vertexAttribPointer(pr.a.aNor,3,gl.FLOAT,false,32,12);
+  gl.enableVertexAttribArray(pr.a.aUV);    gl.vertexAttribPointer(pr.a.aUV,2,gl.FLOAT,false,32,24);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,m.ibo);
+}
+
+let prev=performance.now();
+function frame(now){
+  const dt=Math.min(0.05,(now-prev)/1000); prev=now;
+  const time=now/1000;
+
+  /* simulation (fixed-ish clamped step for camera inertia) */
+  if(!dragging){
+    cam.yaw+=cam.yawV; cam.pitch+=cam.pitchV;
+    cam.pitch=Math.min(PMAX,Math.max(PMIN,cam.pitch));
+    cam.yawV*=0.92; cam.pitchV*=0.92;
+  }
+  if(Math.abs(morph-morphTarget)>1e-4){
+    morph+=Math.sign(morphTarget-morph)*dt/0.9;
+    morph=Math.min(1,Math.max(0,morph));
+    rebuildCables(morph);
+  }
+  boost=Math.max(1,boost-dt*1.6);
+
+  const eye=[
+    cam.target[0]+cam.radius*Math.cos(cam.pitch)*Math.sin(cam.yaw),
+    cam.target[1]+cam.radius*Math.sin(cam.pitch),
+    cam.target[2]+cam.radius*Math.cos(cam.pitch)*Math.cos(cam.yaw)
+  ];
+  resize();
+  const proj=M4.persp(0.9, canvas.width/canvas.height, 0.1, 60);
+  const view=M4.lookAt(eye,cam.target,[0,1,0]);
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.clearColor(0.02,0.02,0.03,1);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+
+  /* background */
+  gl.useProgram(bgProg.p);
+  gl.depthMask(false);
+  gl.bindBuffer(gl.ARRAY_BUFFER,bgBuf);
+  gl.enableVertexAttribArray(bgProg.a.aPos);
+  gl.vertexAttribPointer(bgProg.a.aPos,2,gl.FLOAT,false,0,0);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+  gl.depthMask(true);
+
+  /* shadow blobs (on table surface) */
+  gl.useProgram(shadowProg.p);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+  gl.uniformMatrix4fv(shadowProg.u.uProj,false,proj);
+  gl.uniformMatrix4fv(shadowProg.u.uView,false,view);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,blobTex);
+  gl.uniform1i(shadowProg.u.uTex,0);
+  gl.bindBuffer(gl.ARRAY_BUFFER,blobMesh.vbo);
+  gl.enableVertexAttribArray(shadowProg.a.aPos); gl.vertexAttribPointer(shadowProg.a.aPos,3,gl.FLOAT,false,32,0);
+  gl.enableVertexAttribArray(shadowProg.a.aUV);  gl.vertexAttribPointer(shadowProg.a.aUV,2,gl.FLOAT,false,32,24);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,blobMesh.ibo);
+  shadowList.forEach(s=>{
+    const sc=new Float32Array([s.s,0,0,0, 0,1,0,0, 0,0,s.s,0, s.x,0.006,s.z,1]);
+    gl.uniformMatrix4fv(shadowProg.u.uModel,false,sc);
+    gl.uniform1f(shadowProg.u.uAlpha,s.a);
+    gl.drawElements(gl.TRIANGLES,blobMesh.count,gl.UNSIGNED_SHORT,0);
+  });
+  gl.depthMask(true); gl.disable(gl.BLEND);
+
+  /* opaque meshes */
+  gl.useProgram(meshProg.p);
+  gl.uniformMatrix4fv(meshProg.u.uProj,false,proj);
+  gl.uniformMatrix4fv(meshProg.u.uView,false,view);
+  gl.uniform3fv(meshProg.u.uEye,eye);
+  gl.uniform1i(meshProg.u.uTex,0);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,woodTex);
+  drawList.forEach((d,i)=>{
+    gl.uniformMatrix4fv(meshProg.u.uModel,false,d.model);
+    gl.uniform3fv(meshProg.u.uColor,d.color);
+    gl.uniform1f(meshProg.u.uShin,d.shin);
+    gl.uniform1f(meshProg.u.uSpec,d.spec);
+    gl.uniform1f(meshProg.u.uEmis,d.emis);
+    gl.uniform3fv(meshProg.u.uEmisColor,d.emisColor);
+    const useTex=d.tex?1:0;
+    gl.uniform1f(meshProg.u.uUseTex,useTex);
+    if(d.tex) gl.bindTexture(gl.TEXTURE_2D,d.tex); else gl.bindTexture(gl.TEXTURE_2D,woodTex);
+    bindMeshAttribs(meshProg,d.mesh);
+    gl.drawElements(gl.TRIANGLES,d.mesh.count,gl.UNSIGNED_SHORT,0);
+  });
+
+  /* LED blink animation (update emissive colors) */
+  leds.forEach(l=>{
+    const blink=0.55+0.45*Math.sin(time*3.1+l.phase);
+    drawList[l.idx].emisColor=[ l.base[0]*blink, l.base[1]*blink, l.base[2]*blink ];
+  });
+  const swPulse=0.6+0.4*Math.sin(time*(topo==='switch'?5.2:1.7));
+  drawList[switchStripIdx].emisColor=[0.30*swPulse,0.85*swPulse,1.0*swPulse];
+
+  /* cables: core pass, then additive halo pass */
+  gl.useProgram(cableProg.p);
+  gl.uniformMatrix4fv(cableProg.u.uProj,false,proj);
+  gl.uniformMatrix4fv(cableProg.u.uView,false,view);
+  gl.uniform1f(cableProg.u.uBoost,boost);
+  gl.enableVertexAttribArray(cableProg.a.aPos);
+  gl.enableVertexAttribArray(cableProg.a.aNor);
+  gl.enableVertexAttribArray(cableProg.a.aT);
+  cables.forEach((c,ci)=>{
+    /* pulse positions in arc-length t space */
+    const p=[0,0,0];
+    for(let k=0;k<3;k++) p[k]=(time*0.16 + c.phase + k/3)%1;
+    gl.uniform1f(cableProg.u.uA,p[0]);
+    gl.uniform1f(cableProg.u.uB,p[1]);
+    gl.uniform1f(cableProg.u.uC,p[2]);
+    gl.bindBuffer(gl.ARRAY_BUFFER,c.vbo);
+    gl.vertexAttribPointer(cableProg.a.aPos,3,gl.FLOAT,false,28,0);
+    gl.vertexAttribPointer(cableProg.a.aNor,3,gl.FLOAT,false,28,12);
+    gl.vertexAttribPointer(cableProg.a.aT,1,gl.FLOAT,false,28,24);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,c.ibo);
+    /* core */
+    gl.uniform1f(cableProg.u.uRadius,0.0);
+    gl.uniform1f(cableProg.u.uHalo,0);
+    gl.disable(gl.BLEND);
+    gl.drawElements(gl.TRIANGLES,c.count,gl.UNSIGNED_SHORT,0);
+    /* halo */
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE);
+    gl.depthMask(false);
+    gl.uniform1f(cableProg.u.uRadius,0.10);
+    gl.uniform1f(cableProg.u.uHalo,1);
+    gl.drawElements(gl.TRIANGLES,c.count,gl.UNSIGNED_SHORT,0);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+  });
+
+  updateLabels(proj,view);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

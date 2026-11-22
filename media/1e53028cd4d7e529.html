@@ -1,0 +1,1874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Four gold boxes, wired two ways</title>
+<style>
+  :root{
+    --ink: #f7eddc;
+    --muted: #bda98e;
+    --dim: #8d7c66;
+    --gold: #e9ba6c;
+    --gold-deep: #a87d3e;
+    --ring: #ffb15c;
+    --switch: #7de5ff;
+    --accent: var(--ring);
+    --line: rgba(233, 191, 124, 0.22);
+    --panel: rgba(16, 11, 7, 0.66);
+    --display: "Optima", "Avenir Next", "Helvetica Neue", Helvetica, sans-serif;
+    --text: "Avenir Next", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  *{ box-sizing: border-box; }
+  html, body{
+    margin: 0; height: 100%;
+    background: #070605;
+    color: var(--ink);
+    font-family: var(--text);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  #stage{
+    position: fixed; inset: 0;
+    width: 100%; height: 100%;
+    display: block;
+    touch-action: none;
+    cursor: grab;
+    background: #070605;
+    z-index: 1;
+  }
+  #stage.is-dragging{ cursor: grabbing; }
+  #stage:focus-visible{ outline: 2px solid rgba(233,186,108,.7); outline-offset: -4px; }
+  .vignette{
+    position: fixed; inset: 0; z-index: 2; pointer-events: none;
+    background:
+      radial-gradient(ellipse 78% 66% at 50% 44%, transparent 40%, rgba(3,2,2,.62) 100%),
+      linear-gradient(to bottom, rgba(3,2,2,.42), transparent 22%, transparent 74%, rgba(3,2,2,.5));
+  }
+  .grain{
+    position: fixed; inset: 0; z-index: 3; pointer-events: none;
+    opacity: .05; mix-blend-mode: overlay;
+    background-repeat: repeat;
+  }
+  .ui{
+    position: fixed; inset: 0; z-index: 4;
+    pointer-events: none;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto 1fr auto;
+    gap: clamp(14px, 2vw, 30px);
+    padding: clamp(18px, 2.7vw, 44px);
+  }
+  .masthead{ grid-column: 1; grid-row: 1; max-width: 30rem; }
+  .kicker{
+    margin: 0 0 10px;
+    font-size: clamp(11.5px, 0.85vw, 13px);
+    letter-spacing: .1em;
+    color: var(--gold);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .kicker::before{
+    content: ""; width: 26px; height: 1px; background: var(--gold-deep);
+    display: inline-block;
+  }
+  h1{
+    font-family: var(--display);
+    font-weight: 500;
+    font-size: clamp(27px, 3.1vw, 44px);
+    line-height: 1.06;
+    letter-spacing: -0.012em;
+    margin: 0 0 12px;
+    color: #fbf1de;
+    text-wrap: balance;
+    max-width: 15ch;
+  }
+  .lede{
+    margin: 0;
+    font-size: clamp(12.5px, 0.95vw, 14.5px);
+    line-height: 1.55;
+    color: var(--muted);
+    max-width: 34ch;
+  }
+  .panel{
+    grid-column: 2; grid-row: 1;
+    justify-self: end; align-self: start;
+    pointer-events: auto;
+    width: clamp(232px, 21vw, 288px);
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .panel-label{
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin: 0 0 10px;
+    font-size: 12px;
+    letter-spacing: .055em;
+    color: var(--muted);
+  }
+  .panel-label b{
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: .02em;
+  }
+  .segmented{
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    padding: 3px;
+    border: 1px solid rgba(233,191,124,.3);
+    border-radius: 3px;
+    background: rgba(11, 8, 5, .55);
+    isolation: isolate;
+  }
+  .seg-thumb{
+    position: absolute;
+    z-index: 0;
+    top: 3px; bottom: 3px; left: 3px;
+    width: calc(50% - 3px);
+    border-radius: 2px;
+    background: linear-gradient(180deg, #f0cd91, #d8a85c);
+    box-shadow: 0 1px 10px rgba(233,186,108,.28);
+    transition: transform .42s cubic-bezier(.2,.8,.2,1), background .42s ease, box-shadow .42s ease;
+  }
+  body[data-mode="switch"] .seg-thumb{
+    transform: translateX(calc(100% + 3px));
+    background: linear-gradient(180deg, #c9f4ff, #84dff5);
+    box-shadow: 0 1px 12px rgba(125,229,255,.32);
+  }
+  .segmented button{
+    position: relative; z-index: 1;
+    appearance: none;
+    border: 0; background: transparent;
+    padding: 9px 6px;
+    font-family: var(--text);
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: .015em;
+    color: #cdb995;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: color .3s ease;
+  }
+  .segmented button[aria-pressed="true"]{ color: #191006; }
+  .segmented button:focus-visible{
+    outline: 2px solid rgba(255,255,255,.75);
+    outline-offset: 1px;
+  }
+  .panel-note{
+    margin: 11px 0 0;
+    font-size: 12.25px;
+    line-height: 1.5;
+    color: var(--muted);
+    min-height: 3em;
+    transition: color .3s ease;
+  }
+  body[data-mode="switch"] .panel-label b{ color: #d6f7ff; }
+  .hints{
+    grid-column: 1; grid-row: 3; align-self: end;
+    display: flex; flex-direction: column; gap: 9px;
+    max-width: 34rem;
+  }
+  .hint-line{
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--dim);
+  }
+  .hint-line kbd{
+    font-family: var(--text);
+    font-size: 10.5px;
+    color: #e4d3b4;
+    border: 1px solid rgba(233,191,124,.32);
+    border-bottom-color: rgba(233,191,124,.2);
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin: 0 1px;
+    background: rgba(20,14,9,.55);
+  }
+  .legend{
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px; color: var(--dim);
+    letter-spacing: .02em;
+  }
+  .legend .wire{
+    width: 30px; height: 3px; border-radius: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent);
+    transition: background .5s ease, box-shadow .5s ease;
+  }
+  .legend .dot{
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #fff6e2; box-shadow: 0 0 9px 2px var(--accent);
+    margin-left: 8px;
+    transition: box-shadow .5s ease;
+  }
+  .linkish{
+    pointer-events: auto;
+    appearance: none; border: 0; background: none; padding: 0;
+    font: inherit; font-size: 11.5px;
+    color: #ddc49c; cursor: pointer;
+    text-decoration: underline; text-underline-offset: 3px;
+    text-decoration-color: rgba(233,191,124,.45);
+  }
+  .linkish:hover{ color: #fff3dd; }
+  .linkish:focus-visible{ outline: 2px solid rgba(233,186,108,.8); outline-offset: 3px; }
+  .route{
+    grid-column: 2; grid-row: 3; justify-self: end; align-self: end;
+    min-width: 210px;
+    padding: 2px 0 2px 14px;
+    border-left: 2px solid var(--accent);
+    transition: border-color .5s ease;
+  }
+  .route-label{
+    margin: 0 0 5px;
+    font-size: 11px;
+    letter-spacing: .075em;
+    color: var(--dim);
+  }
+  .route-path{
+    margin: 0;
+    font-family: var(--display);
+    font-size: clamp(15px, 1.2vw, 18px);
+    letter-spacing: .01em;
+    color: #f7ead2;
+    white-space: nowrap;
+  }
+  .route-via{
+    margin: 4px 0 0;
+    font-size: 11.5px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .sr-only{
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  @media (max-width: 780px){
+    .ui{
+      grid-template-columns: 1fr;
+      grid-template-rows: auto auto 1fr auto auto;
+      gap: 12px;
+    }
+    .masthead{ grid-column: 1; grid-row: 1; max-width: 22rem; }
+    h1{ font-size: clamp(24px, 7.4vw, 32px); max-width: 16ch; }
+    .lede{ font-size: 12.5px; max-width: 30ch; }
+    .panel{
+      grid-column: 1; grid-row: 2; justify-self: stretch;
+      width: auto; max-width: 22rem; padding-top: 10px;
+    }
+    .panel-note{ min-height: 0; font-size: 11.5px; }
+    .hints{ grid-column: 1; grid-row: 5; gap: 6px; }
+    .hint-line{ font-size: 11px; }
+    .route{
+      grid-column: 1; grid-row: 4; justify-self: start; align-self: end;
+      min-width: 0; padding-left: 10px;
+    }
+    .route-path{ font-size: 14px; }
+  }
+  @media (max-height: 620px) and (min-width: 781px){
+    .lede{ display: none; }
+    h1{ font-size: clamp(22px, 2.4vw, 30px); }
+    .hints .legend{ display: none; }
+  }
+  @media (prefers-reduced-motion: reduce){
+    .seg-thumb{ transition: none; }
+  }
+</style>
+</head>
+<body data-mode="ring">
+<canvas id="stage" tabindex="0" role="img"
+        aria-label="Four gold desktop AI boxes arranged in a ring on a walnut table. Glowing cables join neighbouring boxes, with bright data pulses travelling along them. Drag to orbit the camera."></canvas>
+<div class="vignette" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+
+<div class="ui">
+  <header class="masthead">
+    <p class="kicker">Two ways to wire a desk cluster</p>
+    <h1>Four gold boxes on a walnut table</h1>
+    <p class="lede">Each box has one glowing cable. Drag to orbit the table, then re-route those cables through a central switch and watch the traffic change.</p>
+  </header>
+
+  <section class="panel" aria-labelledby="topo-label">
+    <p class="panel-label" id="topo-label"><b>Topology</b><span id="topo-state">Ring</span></p>
+    <div class="segmented" role="group" aria-label="Network topology">
+      <span class="seg-thumb" aria-hidden="true"></span>
+      <button id="btn-ring" type="button" aria-pressed="true" aria-label="Ring topology: each box cabled to its two neighbours">Ring</button>
+      <button id="btn-switch" type="button" aria-pressed="false" aria-label="Switch topology: every box cabled to the central switch">Switch</button>
+    </div>
+    <p class="panel-note" id="topo-note">Four cables run box to box in a loop. A message for the far corner crosses two links, relayed by the box in between.</p>
+  </section>
+
+  <div class="hints">
+    <div class="legend" aria-hidden="true"><span class="wire"></span> link <span class="dot"></span> data pulse</div>
+    <p class="hint-line">Drag to orbit, scroll to zoom. Press <kbd>T</kbd> to change topology, <kbd>R</kbd> to reset the view. <button class="linkish" id="btn-labels" type="button" aria-pressed="true">Labels on</button></p>
+  </div>
+
+  <aside class="route" aria-hidden="true">
+    <p class="route-label">Message in flight</p>
+    <p class="route-path" id="route-path">AI-02 → AI-04</p>
+    <p class="route-via" id="route-via">via AI-03, two links</p>
+  </aside>
+
+  <p class="sr-only" id="live" aria-live="polite">Ring topology. Four cables join neighbouring boxes.</p>
+</div>
+
+<script>
+(() => {
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ *  Small math helpers
+ * ------------------------------------------------------------------ */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const mix = (a, b, t) => a + (b - a) * t;
+const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const scale3 = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const len3 = a => Math.hypot(a[0], a[1], a[2]);
+const norm3 = a => { const l = len3(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const lerp3 = (a, b, t) => [mix(a[0], b[0], t), mix(a[1], b[1], t), mix(a[2], b[2], t)];
+const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const easeInOut = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ *  Palette helpers
+ * ------------------------------------------------------------------ */
+function goldRamp(l) {
+  // deep bronze -> polished gold -> highlight
+  const stops = [
+    [0.00, 21, 17, 13],
+    [0.16, 45, 34, 21],
+    [0.32, 79, 55, 27],
+    [0.48, 115, 77, 33],
+    [0.62, 151, 102, 43],
+    [0.76, 185, 132, 61],
+    [0.88, 211, 157, 81],
+    [1.00, 233, 183, 105],
+    [1.14, 247, 211, 141]
+  ];
+  l = clamp(l, 0, 1.14);
+  for (let i = 1; i < stops.length; i++) {
+    if (l <= stops[i][0]) {
+      const a = stops[i - 1], b = stops[i];
+      const t = (l - a[0]) / Math.max(1e-6, b[0] - a[0]);
+      return [Math.round(mix(a[1], b[1], t)), Math.round(mix(a[2], b[2], t)), Math.round(mix(a[3], b[3], t))];
+    }
+  }
+  const s = stops[stops.length - 1];
+  return [s[1], s[2], s[3]];
+}
+function graphiteRamp(l) {
+  // brushed aluminium: cool neutral metal so the switch separates from warm wood and gold
+  const stops = [
+    [0.00, 27, 30, 34],
+    [0.30, 56, 61, 67],
+    [0.55, 88, 94, 101],
+    [0.78, 122, 129, 137],
+    [1.00, 162, 170, 178]
+  ];
+  l = clamp(l, 0, 1);
+  for (let i = 1; i < stops.length; i++) {
+    if (l <= stops[i][0]) {
+      const a = stops[i - 1], b = stops[i];
+      const t = (l - a[0]) / Math.max(1e-6, b[0] - a[0]);
+      return [Math.round(mix(a[1], b[1], t)), Math.round(mix(a[2], b[2], t)), Math.round(mix(a[3], b[3], t))];
+    }
+  }
+  return [162, 170, 178];
+}
+const rgb = c => `rgb(${c[0]},${c[1]},${c[2]})`;
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const mixRGB = (a, b, t) => [Math.round(mix(a[0], b[0], t)), Math.round(mix(a[1], b[1], t)), Math.round(mix(a[2], b[2], t))];
+
+/* ------------------------------------------------------------------ *
+ *  Canvas / camera
+ * ------------------------------------------------------------------ */
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { alpha: false });
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+let W = 1280, H = 720, DPR = 1;
+const FOV = 34 * Math.PI / 180;
+const cam = {
+  az: 0.58,
+  el: 0.40,
+  zoom: 1,
+  fit: 13.4,
+  target: [0, 0.62, 0],
+  vAz: 0, vEl: 0
+};
+const userTouchedCam = { value: false };
+
+let quality = 1; // resolution scale, lowered automatically on slow machines
+function resize() {
+  const r = canvas.getBoundingClientRect();
+  W = Math.max(300, Math.round(r.width));
+  H = Math.max(300, Math.round(r.height));
+  DPR = Math.min(Math.min(window.devicePixelRatio || 1, 2) * quality, 2);
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  updateFit();
+}
+function updateFit() {
+  const f = (H * 0.5) / Math.tan(FOV * 0.5);
+  const need = 13.4;
+  cam.fit = clamp(need * f / (W * 0.84), 12.9, 44);
+  if (!userTouchedCam.value) {
+    const portrait = W / H < 0.92;
+    cam.el = portrait ? 0.62 : 0.40;
+    cam.az = portrait ? 0.72 : 0.58;
+  }
+}
+
+function getCamera() {
+  const ce = Math.cos(cam.el), se = Math.sin(cam.el);
+  const dist = cam.fit / cam.zoom;
+  const eye = [
+    cam.target[0] + dist * ce * Math.sin(cam.az),
+    cam.target[1] + dist * se,
+    cam.target[2] + dist * ce * Math.cos(cam.az)
+  ];
+  const fwd = norm3(sub3(cam.target, eye));
+  const right = norm3(cross3(fwd, [0, 1, 0]));
+  const up = cross3(right, fwd);
+  const f = (H * 0.5) / Math.tan(FOV * 0.5);
+  return { eye, fwd, right, up, f, dist };
+}
+function project(p, c) {
+  const v = sub3(p, c.eye);
+  const z = dot3(v, c.fwd);
+  if (z < 0.35) return null;
+  const s = c.f / z;
+  return {
+    x: W * 0.5 + dot3(v, c.right) * s,
+    y: H * 0.515 - dot3(v, c.up) * s,
+    z, s
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ *  Scene definition
+ * ------------------------------------------------------------------ */
+const RING_R = 2.95;
+const TABLE = { w: 11.9, d: 9.8, t: 0.44 };
+const BOX = { w: 1.64, h: 0.62, d: 1.18 };
+const boxes = [
+  { id: 'AI-01', name: 'Aster', x: -RING_R, z: -RING_R },
+  { id: 'AI-02', name: 'Birch', x:  RING_R, z: -RING_R },
+  { id: 'AI-03', name: 'Cedar', x:  RING_R, z:  RING_R },
+  { id: 'AI-04', name: 'Dune',  x: -RING_R, z:  RING_R }
+].map((b, i) => Object.assign(b, { w: BOX.w, h: BOX.h, d: BOX.d, y0: 0, index: i, seed: i * 97 + 13 }));
+
+const SWITCH = { id: 'SW-01', name: 'central switch', x: 0, z: 0, w: 1.52, h: 0.50, d: 1.16, y0: 0, index: 4 };
+
+const COL_RING = [255, 172, 92];
+const COL_SWITCH = [74, 208, 255];
+const CABLE_LIFT = 0.52;
+
+const state = {
+  mode: 'ring',
+  morph: 0,
+  labels: true,
+  time: 0,
+  dragging: false
+};
+
+/* Port point on a cuboid side, aimed at a horizontal target. */
+function portOnBox(box, target) {
+  let dx = target.x - box.x, dz = target.z - box.z;
+  const l = Math.hypot(dx, dz) || 1;
+  dx /= l; dz /= l;
+  const tx = Math.abs(dx) > 1e-4 ? (box.w * 0.5) / Math.abs(dx) : Infinity;
+  const tz = Math.abs(dz) > 1e-4 ? (box.d * 0.5) / Math.abs(dz) : Infinity;
+  const t = Math.min(tx, tz) + 0.015;
+  return [box.x + dx * t, box.h * 0.52, box.z + dz * t];
+}
+
+/* ------------------------------------------------------------------ *
+ *  Cable geometry
+ * ------------------------------------------------------------------ */
+const cables = [0, 1, 2, 3].map(i => ({
+  index: i,
+  pts: [],
+  cum: [],
+  len: 1,
+  a: [0, 0, 0],
+  b: [0, 0, 0],
+  na: [0, 0, 1],
+  nb: [0, 0, 1],
+  color: COL_RING.slice(),
+  light: COL_RING.slice()
+}));
+
+function cablePoints(p0, n0, p1, n1, lift) {
+  const d = dist3(p0, p1);
+  const h = clamp(d * 0.30, 0.34, 1.05);
+  const c1 = [p0[0] + n0[0] * h, 0.02, p0[2] + n0[2] * h];
+  const c2 = [p1[0] + n1[0] * h, 0.02, p1[2] + n1[2] * h];
+  const N = 46;
+  const pts = [];
+  for (let k = 0; k <= N; k++) {
+    const t = k / N;
+    const it = 1 - t;
+    const x = it * it * it * p0[0] + 3 * it * it * t * c1[0] + 3 * it * t * t * c2[0] + t * t * t * p1[0];
+    let y = it * it * it * p0[1] + 3 * it * it * t * c1[1] + 3 * it * t * t * c2[1] + t * t * t * p1[1];
+    const z = it * it * it * p0[2] + 3 * it * it * t * c1[2] + 3 * it * t * t * c2[2] + t * t * t * p1[2];
+    const arch = Math.sin(Math.PI * t);
+    y -= 0.052 * arch;
+    y = Math.max(y, 0.052);
+    y += lift * arch * arch;
+    pts.push([x, y, z]);
+  }
+  return pts;
+}
+
+function updateCables() {
+  const m = state.morph;
+  const lift = CABLE_LIFT * Math.sin(Math.PI * clamp(m, 0, 1));
+  const portY = BOX.h * 0.52;
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    const bi = boxes[i], bj = boxes[j];
+    const ringA = portOnBox(bi, bj);
+    const ringB = portOnBox(bj, bi);
+    const swA = portOnBox(bi, SWITCH);
+    const swB = portOnBox(SWITCH, bi);
+    const a = lerp3(ringA, swA, m);
+    const b = lerp3(ringB, swB, m);
+    const nA = norm3([a[0] - bi.x, 0, a[2] - bi.z]);
+    const nB = m < 0.999
+      ? norm3(lerp3([ringB[0] - bj.x, 0, ringB[2] - bj.z], [swB[0] - SWITCH.x, 0, swB[2] - SWITCH.z], m))
+      : norm3([swB[0] - SWITCH.x, 0, swB[2] - SWITCH.z]);
+    const c = cables[i];
+    c.a = a; c.b = b; c.na = nA; c.nb = nB;
+    c.pts = cablePoints(a, nA, b, nB, lift);
+    c.cum.length = 0;
+    let total = 0;
+    for (let k = 0; k < c.pts.length; k++) {
+      if (k > 0) total += dist3(c.pts[k - 1], c.pts[k]);
+      c.cum.push(total);
+    }
+    c.len = total || 1;
+    c.color = mixRGB(COL_RING, COL_SWITCH, smoothstep(0.02, 0.92, m));
+    c.light = mixRGB([255, 195, 118], [150, 236, 255], smoothstep(0.02, 0.92, m));
+    c.portY = portY;
+  }
+}
+
+function sampleCable(cable, s) {
+  const cum = cable.cum;
+  if (s <= 0) return cable.pts[0];
+  if (s >= cable.len) return cable.pts[cable.pts.length - 1];
+  let lo = 0, hi = cum.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] <= s) lo = mid; else hi = mid;
+  }
+  const t = (s - cum[lo]) / Math.max(1e-6, cum[lo + 1] - cum[lo]);
+  return lerp3(cable.pts[lo], cable.pts[lo + 1], t);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Traffic simulation
+ * ------------------------------------------------------------------ */
+const rng = mulberry32(0x51F0A3);
+const packets = [];
+let spawnTimer = 0.35;
+let arrivalCounter = 0;
+let lastRouteSummary = null;
+
+function routePath(src, dst, mode) {
+  if (src === dst) return [src];
+  if (mode === 'switch') return [src, 'S', dst];
+  const f = (dst - src + 4) % 4;
+  const b = 4 - f;
+  const path = [src];
+  let n = src;
+  if (f <= b) { for (let k = 0; k < f; k++) { n = (n + 1) % 4; path.push(n); } }
+  else { for (let k = 0; k < b; k++) { n = (n + 3) % 4; path.push(n); } }
+  return path;
+}
+function linkOf(u, v, mode) {
+  if (mode === 'switch') {
+    if (u === 'S') return { cable: v, reverse: true };
+    return { cable: u, reverse: false };
+  }
+  if (v === (u + 1) % 4) return { cable: u, reverse: false };
+  return { cable: v, reverse: true };
+}
+function nodeName(n) { return n === 'S' ? 'SW-01' : boxes[n].id; }
+
+function spawnPacket() {
+  let src = Math.floor(rng() * 4);
+  let dst = Math.floor(rng() * 4);
+  if (dst === src) dst = (dst + 1 + Math.floor(rng() * 3)) % 4;
+  packets.push({
+    src, dst,
+    path: routePath(src, dst, state.mode),
+    idx: 0,
+    t: 0,
+    link: null,
+    linkDur: 1,
+    pause: 0.12,
+    speed: 2.5 + rng() * 0.7,
+    age: 0,
+    tint: rng()
+  });
+}
+
+function updateTraffic(dt) {
+  spawnTimer -= dt;
+  if (spawnTimer <= 0 && packets.length < 7) {
+    spawnPacket();
+    spawnTimer = 0.72 + rng() * 0.62;
+  }
+  for (let i = packets.length - 1; i >= 0; i--) {
+    const p = packets[i];
+    p.age += dt;
+    if (p.pause > 0) { p.pause -= dt; continue; }
+    if (!p.link) {
+      const u = p.path[p.idx], v = p.path[p.idx + 1];
+      if (v === undefined) { packets.splice(i, 1); continue; }
+      const li = linkOf(u, v, state.mode);
+      p.link = li;
+      p.linkDur = Math.max(0.35, cables[li.cable].len / p.speed);
+      p.t = li.reverse ? 1 : 0;
+    }
+    const dir = p.link.reverse ? -1 : 1;
+    p.t += dir * (dt / p.linkDur);
+    const arrived = dir > 0 ? p.t >= 1 : p.t <= 0;
+    if (arrived) {
+      p.t = dir > 0 ? 1 : 0;
+      p.idx += 1;
+      p.link = null;
+      if (p.idx >= p.path.length - 1) {
+        arrivalCounter++;
+        packets.splice(i, 1);
+        continue;
+      }
+      p.pause = 0.16;
+      if (p.needReroute) {
+        p.needReroute = false;
+        p.path = routePath(p.path[p.idx], p.dst, state.mode);
+        p.idx = 0;
+      }
+    }
+  }
+  if (packets.length === 0) spawnTimer = Math.min(spawnTimer, 0.2);
+}
+
+function reroutePackets() {
+  for (let i = packets.length - 1; i >= 0; i--) {
+    const p = packets[i];
+    const u = p.path[p.idx];
+    const v = p.path[p.idx + 1];
+    if (v === undefined) { packets.splice(i, 1); continue; }
+    const at = p.t >= 0.5 ? v : u;
+    if (at === p.dst) { packets.splice(i, 1); continue; }
+    p.path = routePath(at, p.dst, state.mode);
+    p.idx = 0;
+    p.t = 0;
+    p.link = null;
+    p.pause = 0.1;
+    p.needReroute = false;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Table drawing
+ * ------------------------------------------------------------------ */
+const tableGrain = (() => {
+  const r = mulberry32(20240617);
+  const planks = [];
+  const N = 9;
+  const pw = TABLE.w / N;
+  for (let i = 0; i < N; i++) {
+    const x0 = -TABLE.w / 2 + i * pw;
+    const tone = 0.82 + r() * 0.36;
+    const grains = [];
+    const gc = 3 + Math.floor(r() * 3);
+    for (let g = 0; g < gc; g++) {
+      grains.push({
+        off: (r() - 0.5) * pw * 0.82,
+        amp: 0.015 + r() * 0.055,
+        freq: 0.9 + r() * 2.1,
+        phase: r() * TAU,
+        alpha: 0.10 + r() * 0.20,
+        light: r() > 0.62,
+        width: 0.7 + r() * 1.3
+      });
+    }
+    const joints = [];
+    if (r() > 0.35) joints.push((r() - 0.5) * TABLE.d * 0.86);
+    planks.push({ x0, x1: x0 + pw, tone, grains, joints });
+  }
+  return planks;
+})();
+
+function polyPath(pts, expand) {
+  if (!pts.length) return;
+  if (expand) {
+    let cx = 0, cy = 0;
+    for (const p of pts) { cx += p.x; cy += p.y; }
+    cx /= pts.length; cy /= pts.length;
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const dx = p.x - cx, dy = p.y - cy;
+      const l = Math.hypot(dx, dy) || 1;
+      const x = p.x + dx / l * expand, y = p.y + dy / l * expand;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    return;
+  }
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath();
+}
+
+function drawTable(c) {
+  const hw = TABLE.w / 2, hd = TABLE.d / 2, th = TABLE.t;
+  const faces = [
+    { n: [0, 0, 1], q: [[-hw, -th, hd], [hw, -th, hd], [hw, 0, hd], [-hw, 0, hd]], tone: 0.66 },
+    { n: [0, 0, -1], q: [[hw, -th, -hd], [-hw, -th, -hd], [-hw, 0, -hd], [hw, 0, -hd]], tone: 0.34 },
+    { n: [1, 0, 0], q: [[hw, -th, hd], [hw, -th, -hd], [hw, 0, -hd], [hw, 0, hd]], tone: 0.5 },
+    { n: [-1, 0, 0], q: [[-hw, -th, -hd], [-hw, -th, hd], [-hw, 0, hd], [-hw, 0, -hd]], tone: 0.44 }
+  ];
+  const center = [0, -th / 2, 0];
+  for (const f of faces) {
+    if (dot3(f.n, sub3(c.eye, center)) <= 0) continue;
+    const pts = f.q.map(p => project(p, c));
+    if (pts.some(p => !p)) continue;
+    const dark = [Math.round(28 * f.tone + 6), Math.round(19 * f.tone + 4), Math.round(12 * f.tone + 3)];
+    const lit = [Math.round(74 * f.tone + 12), Math.round(48 * f.tone + 8), Math.round(29 * f.tone + 5)];
+    const ys = pts.map(p => p.y);
+    const g = ctx.createLinearGradient(0, Math.min(...ys), 0, Math.max(...ys));
+    g.addColorStop(0, rgb(lit));
+    g.addColorStop(1, rgb(dark));
+    ctx.fillStyle = g;
+    polyPath(pts, 0.6);
+    ctx.fill();
+  }
+
+  // table top, plank by plank
+  for (const pl of tableGrain) {
+    const pts = [
+      project([pl.x0, 0, -hd], c),
+      project([pl.x1, 0, -hd], c),
+      project([pl.x1, 0, hd], c),
+      project([pl.x0, 0, hd], c)
+    ];
+    if (pts.some(p => !p)) continue;
+    const base = [58, 38, 24].map(v => Math.round(v * pl.tone));
+    const g = ctx.createLinearGradient(0, Math.min(pts[0].y, pts[1].y), 0, Math.max(pts[2].y, pts[3].y));
+    g.addColorStop(0, rgb(base.map(v => v * 0.82)));
+    g.addColorStop(0.55, rgb(base));
+    g.addColorStop(1, rgb(base.map(v => v * 0.72)));
+    ctx.fillStyle = g;
+    polyPath(pts, 0.45);
+    ctx.fill();
+
+    // grain
+    for (const gr of pl.grains) {
+      const xMid = (pl.x0 + pl.x1) / 2 + gr.off;
+      ctx.beginPath();
+      let started = false;
+      for (let z = -hd + 0.05; z <= hd; z += 0.55) {
+        const x = xMid + Math.sin(z * gr.freq + gr.phase) * gr.amp + Math.sin(z * gr.freq * 2.7 + gr.phase * 1.7) * gr.amp * 0.36;
+        const p = project([x, 0.004, z], c);
+        if (!p) { started = false; continue; }
+        if (!started) { ctx.moveTo(p.x, p.y); started = true; } else ctx.lineTo(p.x, p.y);
+      }
+      ctx.strokeStyle = gr.light ? `rgba(196,146,92,${gr.alpha * 0.5})` : `rgba(12,7,4,${gr.alpha})`;
+      ctx.lineWidth = gr.width;
+      ctx.stroke();
+    }
+    // plank seam
+    const seamA = project([pl.x1, 0.003, -hd], c);
+    const seamB = project([pl.x1, 0.003, hd], c);
+    if (seamA && seamB) {
+      ctx.beginPath(); ctx.moveTo(seamA.x, seamA.y); ctx.lineTo(seamB.x, seamB.y);
+      ctx.strokeStyle = 'rgba(8,5,3,.5)';
+      ctx.lineWidth = 1.1;
+      ctx.stroke();
+    }
+    for (const jz of pl.joints) {
+      const a = project([pl.x0, 0.003, jz], c);
+      const b = project([pl.x1, 0.003, jz], c);
+      if (a && b) {
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+        ctx.strokeStyle = 'rgba(8,5,3,.34)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+  }
+
+  // front edge highlight (top rim)
+  const rim = [
+    project([-hw, 0, hd], c), project([hw, 0, hd], c),
+    project([hw, 0, -hd], c), project([-hw, 0, -hd], c)
+  ];
+  if (rim.every(p => p)) {
+    ctx.beginPath();
+    ctx.moveTo(rim[0].x, rim[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(rim[i].x, rim[i].y);
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(233,178,112,.16)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+}
+
+/* Faint machined inlay in the tabletop, plus a cool halo when the switch is live. */
+function drawTableInlay(c) {
+  const circles = [
+    { r: 2.02, col: 'rgba(236,198,140,', a: 0.20 },
+    { r: 1.72, col: 'rgba(236,198,140,', a: 0.10 }
+  ];
+  const m = smoothstep(0.05, 0.7, state.morph);
+  if (m > 0.01) circles.push({ r: SWITCH.w * 0.5 + 0.34, col: 'rgba(150,236,255,', a: 0.34 * m });
+  for (const ring of circles) {
+    ctx.beginPath();
+    let started = false, ok = true;
+    for (let i = 0; i <= 96; i++) {
+      const a = (i / 96) * TAU;
+      const p = project([Math.cos(a) * ring.r, 0.008, Math.sin(a) * ring.r], c);
+      if (!p) { ok = false; break; }
+      if (!started) { ctx.moveTo(p.x, p.y); started = true; } else ctx.lineTo(p.x, p.y);
+    }
+    if (!ok) continue;
+    ctx.strokeStyle = ring.col + ring.a + ')';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+  }
+  if (m > 0.01) {
+    // soft cool spill on the table around the switch
+    const p = project([0, 0.010, 0], c);
+    const e = project([SWITCH.w * 0.5 + 0.9, 0.010, 0], c);
+    if (p && e) {
+      const rad = Math.max(24, Math.abs(e.x - p.x));
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad);
+      g.addColorStop(0, `rgba(96,196,226,${0.16 * m})`);
+      g.addColorStop(0.5, `rgba(70,150,190,${0.07 * m})`);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(p.x, p.y, rad, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+  }
+}
+
+function drawTableLight(c) {
+  const p = project([0, 0.01, 0], c);
+  if (!p) return;
+  const rad = Math.max(W, H) * 0.55;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad);
+  g.addColorStop(0, 'rgba(255,184,108,.14)');
+  g.addColorStop(0.35, 'rgba(232,146,72,.072)');
+  g.addColorStop(0.7, 'rgba(120,62,26,.02)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+}
+
+function drawGroundShadow(box, c, strength) {
+  const center = project([box.x, 0.006, box.z], c);
+  if (!center) return;
+  const ux = project([box.x + box.w * 0.62, 0.006, box.z], c);
+  const uz = project([box.x, 0.006, box.z + box.d * 0.62], c);
+  if (!ux || !uz) return;
+  const ax = ux.x - center.x, ay = ux.y - center.y;
+  const bx = uz.x - center.x, by = uz.y - center.y;
+  ctx.save();
+  ctx.transform(ax, ay, bx, by, center.x, center.y);
+  const g = ctx.createRadialGradient(0, 0, 0.08, 0, 0, 1);
+  g.addColorStop(0, `rgba(9,5,3,${0.66 * strength})`);
+  g.addColorStop(0.55, `rgba(9,5,3,${0.4 * strength})`);
+  g.addColorStop(0.82, `rgba(9,5,3,${0.13 * strength})`);
+  g.addColorStop(1, 'rgba(9,5,3,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, 1, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+
+  // warm light spilling out from under each machine
+  const spill = project([box.x, 0.008, box.z], c);
+  if (spill) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.transform(ax * 1.5, ay * 1.5, bx * 1.5, by * 1.5, spill.x, spill.y);
+    const g2 = ctx.createRadialGradient(0, 0, 0.15, 0, 0, 1);
+    const cc = cables[box.index].color;
+    g2.addColorStop(0, rgba(cc, 0.10 * strength));
+    g2.addColorStop(0.7, rgba(cc, 0.03 * strength));
+    g2.addColorStop(1, rgba(cc, 0));
+    ctx.fillStyle = g2;
+    ctx.beginPath(); ctx.arc(0, 0, 1, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Lighting + cuboid faces
+ * ------------------------------------------------------------------ */
+const LIGHT_KEY = norm3([-0.52, 0.86, 0.34]);
+const LIGHT_FILL = norm3([0.66, 0.34, -0.62]);
+
+function faceLum(n, eye, center) {
+  const key = Math.max(0, dot3(n, LIGHT_KEY));
+  const fill = Math.max(0, dot3(n, LIGHT_FILL));
+  const facing = Math.max(0, dot3(n, norm3(sub3(eye, center))));
+  return 0.10 + 0.72 * key + 0.12 * fill + 0.18 * facing;
+}
+
+function collectCuboidFaces(cfg, c, items) {
+  const { x, z, w, h, d, y0, alpha = 1, type = 'gold', scale = 1 } = cfg;
+  const hw = w * 0.5, hd = d * 0.5;
+  const x0 = x - hw, x1 = x + hw, z0 = z - hd, z1 = z + hd;
+  const ya = y0, yb = y0 + h;
+  const faces = [
+    { n: [0, 1, 0], q: [[x0, yb, z0], [x1, yb, z0], [x1, yb, z1], [x0, yb, z1]], top: true },
+    { n: [0, -1, 0], q: [[x0, ya, z1], [x1, ya, z1], [x1, ya, z0], [x0, ya, z0]] },
+    { n: [0, 0, 1], q: [[x0, ya, z1], [x1, ya, z1], [x1, yb, z1], [x0, yb, z1]] },
+    { n: [0, 0, -1], q: [[x1, ya, z0], [x0, ya, z0], [x0, yb, z0], [x1, yb, z0]] },
+    { n: [1, 0, 0], q: [[x1, ya, z1], [x1, ya, z0], [x1, yb, z0], [x1, yb, z1]] },
+    { n: [-1, 0, 0], q: [[x0, ya, z0], [x0, ya, z1], [x0, yb, z1], [x0, yb, z0]] }
+  ];
+  for (const f of faces) {
+    const fc = [ (f.q[0][0] + f.q[2][0]) / 2, (f.q[0][1] + f.q[2][1]) / 2, (f.q[0][2] + f.q[2][2]) / 2 ];
+    if (dot3(f.n, sub3(c.eye, fc)) <= 0) continue;
+    const pts = f.q.map(p => project(p, c));
+    if (pts.some(p => !p)) continue;
+    let depth = 0;
+    for (const p of pts) depth += p.z;
+    depth /= pts.length;
+    const lum = faceLum(f.n, c.eye, fc);
+    const isTop = !!f.top;
+    let cLo, cHi;
+    if (type === 'gold') {
+      cLo = goldRamp(lum * (isTop ? 0.94 : 0.80));
+      cHi = goldRamp(lum * (isTop ? 1.14 : 1.04));
+      if (!isTop) {
+        const cool = 0.30 * smoothstep(0.34, 0.08, lum);
+        cLo = mixRGB(cLo, [52, 58, 68], cool);
+        cHi = mixRGB(cHi, [62, 70, 82], cool * 0.8);
+      }
+    } else {
+      cLo = graphiteRamp(lum * 0.82);
+      cHi = graphiteRamp(lum * 1.05);
+    }
+    // vertical-ish gradient: light from above
+    const ys = pts.map(p => p.y);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    items.push({
+      kind: 'face',
+      depth,
+      poly: pts,
+      c0: rgb(cHi), c1: rgb(cLo),
+      alpha,
+      gy0: minY, gy1: Math.max(maxY, minY + 0.5),
+      edge: type === 'gold'
+        ? (isTop ? `rgba(255,232,180,${0.3 * alpha})` : `rgba(255,220,165,${0.13 * alpha})`)
+        : `rgba(190,230,240,${0.09 * alpha})`
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Top-plate details (vents, badge, LED)
+ * ------------------------------------------------------------------ */
+function collectTopDetails(box, c, items, appearance) {
+  const topY = box.y0 + box.h + 0.004;
+  const hw = box.w / 2, hd = box.d / 2;
+  const outward = norm3([box.x, 0, box.z]);
+  if (!isFinite(outward[0])) outward[0] = 0, outward[2] = 1;
+  const ox = outward[0], oz = outward[2];
+  const inward = [-ox, -oz];
+  const tangent = [-oz, ox];
+
+  // inset plate
+  const inset = 0.1;
+  const plate = [
+    [box.x - hw + inset, topY, box.z - hd + inset],
+    [box.x + hw - inset, topY, box.z - hd + inset],
+    [box.x + hw - inset, topY, box.z + hd - inset],
+    [box.x - hw + inset, topY, box.z + hd - inset]
+  ].map(p => project(p, c));
+  if (!plate.some(p => !p)) {
+    let depth = 0;
+    for (const p of plate) depth += p.z;
+    depth /= 4;
+    items.push({
+      kind: 'face', depth: depth - 0.01, poly: plate,
+      c0: 'rgba(255,231,183,.96)', c1: 'rgba(196,143,66,.96)',
+      alpha: 1, gy0: Math.min(...plate.map(p => p.y)), gy1: Math.max(...plate.map(p => p.y)) + 1,
+      edge: 'rgba(255,239,200,.34)'
+    });
+    // rim line
+    items.push({ kind: 'polyline', depth: depth - 0.012, poly: plate, color: 'rgba(52,33,14,.5)', width: 1 });
+  }
+
+  // vent slots toward the inside of the ring
+  const ventCount = 3;
+  for (let k = 0; k < ventCount; k++) {
+    const off = -0.24 + k * 0.15;
+    const cx = box.x + inward[0] * 0.2 + tangent[0] * off;
+    const cz = box.z + inward[2] * 0.2 + tangent[2] * off;
+    const halfLen = 0.3;
+    const halfW = 0.028;
+    const quad = [
+      [cx - tangent[0] * halfLen - inward[0] * halfW, topY + 0.002, cz - tangent[2] * halfLen - inward[2] * halfW],
+      [cx + tangent[0] * halfLen - inward[0] * halfW, topY + 0.002, cz + tangent[2] * halfLen - inward[2] * halfW],
+      [cx + tangent[0] * halfLen + inward[0] * halfW, topY + 0.002, cz + tangent[2] * halfLen + inward[2] * halfW],
+      [cx - tangent[0] * halfLen + inward[0] * halfW, topY + 0.002, cz - tangent[2] * halfLen + inward[2] * halfW]
+    ].map(p => project(p, c));
+    if (quad.some(p => !p)) continue;
+    let depth = 0; for (const p of quad) depth += p.z; depth /= 4;
+    items.push({ kind: 'face', depth: depth - 0.02, poly: quad, c0: 'rgb(28,19,10)', c1: 'rgb(17,11,6)', alpha: 0.92, gy0: 0, gy1: 1, edge: 'rgba(255,222,164,.12)' });
+  }
+
+  // badge near the outward corner
+  const bx = box.x + ox * 0.38, bz = box.z + oz * 0.38;
+  const badge = [
+    [bx - tangent[0] * 0.17 - ox * 0.11, topY + 0.002, bz - tangent[2] * 0.17 - oz * 0.11],
+    [bx + tangent[0] * 0.17 - ox * 0.11, topY + 0.002, bz + tangent[2] * 0.17 - oz * 0.11],
+    [bx + tangent[0] * 0.17 + ox * 0.11, topY + 0.002, bz + tangent[2] * 0.17 + oz * 0.11],
+    [bx - tangent[0] * 0.17 + ox * 0.11, topY + 0.002, bz - tangent[2] * 0.17 + oz * 0.11]
+  ].map(p => project(p, c));
+  if (!badge.some(p => !p)) {
+    let depth = 0; for (const p of badge) depth += p.z; depth /= 4;
+    items.push({ kind: 'face', depth: depth - 0.03, poly: badge, c0: 'rgba(40,26,12,.86)', c1: 'rgba(24,15,7,.9)', alpha: 1, gy0: 0, gy1: 1, edge: 'rgba(255,226,168,.2)' });
+    const lp = project([bx, topY + 0.01, bz], c);
+    if (lp) items.push({ kind: 'glow', depth: lp.z - 0.04, x: lp.x, y: lp.y, r: Math.max(7, lp.s * 0.16), color: cables[box.index].light, alpha: appearance.ledAlpha ?? 0.9, core: true });
+  }
+  // side light bar on the outward-facing faces
+  const barY = box.y0 + box.h * 0.62;
+  const barLen = 0.34;
+  const barPts = [
+    project([bx - tangent[0] * barLen * 0.5, barY, bz - tangent[2] * barLen * 0.5], c),
+    project([bx + tangent[0] * barLen * 0.5, barY, bz + tangent[2] * barLen * 0.5], c)
+  ];
+  if (barPts.every(p => p)) {
+    items.push({
+      kind: 'cableSeg',
+      depth: (barPts[0].z + barPts[1].z) / 2 - 0.03,
+      pts: barPts,
+      w: Math.max(1.4, barPts[0].s * 0.018),
+      color: cables[box.index].light,
+      glow: cables[box.index].color,
+      alpha: 0.85
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Switch details
+ * ------------------------------------------------------------------ */
+function collectSwitchTop(c, items, alpha, scale) {
+  const topY = SWITCH.y0 + SWITCH.h * scale + 0.004;
+  const s = SWITCH;
+  const plate = [
+    [s.x - s.w * 0.5 * scale + 0.06, topY, s.z - s.d * 0.5 * scale + 0.06],
+    [s.x + s.w * 0.5 * scale - 0.06, topY, s.z - s.d * 0.5 * scale + 0.06],
+    [s.x + s.w * 0.5 * scale - 0.06, topY, s.z + s.d * 0.5 * scale - 0.06],
+    [s.x - s.w * 0.5 * scale + 0.06, topY, s.z + s.d * 0.5 * scale - 0.06]
+  ].map(p => project(p, c));
+  if (plate.some(p => !p)) return;
+  let depth = 0; for (const p of plate) depth += p.z; depth /= 4;
+  items.push({ kind: 'face', depth: depth - 0.01, poly: plate, c0: 'rgba(74,70,62,1)', c1: 'rgba(30,28,25,1)', alpha, gy0: 0, gy1: 1, edge: `rgba(125,229,255,${0.26 * alpha})` });
+
+  // warm metal trim band around the base: sells the switch as a real object
+  const trim = [];
+  let trimOk = true;
+  for (let i = 0; i <= 72; i++) {
+    const a = (i / 72) * TAU;
+    const p = project([s.x + Math.cos(a) * (s.w * 0.5 * scale + 0.045), 0.012, s.z + Math.sin(a) * (s.d * 0.5 * scale + 0.045)], c);
+    if (!p) { trimOk = false; break; }
+    trim.push(p);
+  }
+  if (trimOk) {
+    items.push({ kind: 'polyline', depth: depth - 0.02, poly: trim, color: `rgba(236,190,124,${0.42 * alpha})`, width: Math.max(1.2, project([0, 0, 0], c).s * 0.012) });
+  }
+  // inner machined ring on the top plate
+  const inner = [];
+  let innerOk = true;
+  for (let i = 0; i <= 64; i++) {
+    const a = (i / 64) * TAU;
+    const p = project([s.x + Math.cos(a) * 0.30 * scale, topY + 0.002, s.z + Math.sin(a) * 0.30 * scale], c);
+    if (!p) { innerOk = false; break; }
+    inner.push(p);
+  }
+  if (innerOk) items.push({ kind: 'polyline', depth: depth - 0.025, poly: inner, color: `rgba(150,236,255,${0.30 * alpha})`, width: 1.1 });
+
+  // port lights, one per box
+  for (let i = 0; i < 4; i++) {
+    const b = boxes[i];
+    const dir = norm3([b.x, 0, b.z]);
+    const px = s.x + dir[0] * 0.46 * scale;
+    const pz = s.z + dir[2] * 0.46 * scale;
+    const p = project([px, topY + 0.006, pz], c);
+    if (!p) continue;
+    items.push({ kind: 'glow', depth: p.z - 0.03, x: p.x, y: p.y, r: Math.max(7, p.s * 0.085), color: [190, 246, 255], alpha: 1 * alpha, core: true });
+  }
+  // centre ring emblem
+  const cp = project([s.x, topY + 0.006, s.z], c);
+  if (cp) {
+    const rr = Math.max(7, cp.s * 0.095);
+    items.push({ kind: 'ring', depth: cp.z - 0.02, x: cp.x, y: cp.y, r: rr, color: [150, 238, 255], alpha: 0.85 * alpha });
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Cables, ports, pulses -> draw list
+ * ------------------------------------------------------------------ */
+function collectCables(c, items) {
+  for (const cab of cables) {
+    const col = cab.color;
+    const light = cab.light;
+    for (let k = 0; k < cab.pts.length - 1; k++) {
+      const p0 = project(cab.pts[k], c);
+      const p1 = project(cab.pts[k + 1], c);
+      if (!p0 || !p1) continue;
+      const w = Math.max(1.1, ((p0.s + p1.s) * 0.5) * 0.05);
+      // extend each segment slightly so butt caps meet without gaps
+      const dx = p1.x - p0.x, dy = p1.y - p0.y;
+      const dl = Math.hypot(dx, dy) || 1;
+      const ex = dx / dl * 0.7, ey = dy / dl * 0.7;
+      items.push({
+        kind: 'cableSeg',
+        depth: (p0.z + p1.z) * 0.5,
+        pts: [{ x: p0.x - ex, y: p0.y - ey }, { x: p1.x + ex, y: p1.y + ey }],
+        w,
+        color: col,
+        light,
+        glow: col,
+        alpha: 1
+      });
+    }
+    // ports at each end
+    for (const end of [[cab.a, cab.na], [cab.b, cab.nb]]) {
+      const p = project(end[0], c);
+      if (!p) continue;
+      items.push({ kind: 'port', depth: p.z - 0.015, x: p.x, y: p.y, r: Math.max(3, p.s * 0.05), color: col, light });
+    }
+  }
+}
+
+function collectPulses(c, items) {
+  // ambient idle pulses
+  for (const cab of cables) {
+    for (let k = 0; k < 2; k++) {
+      const phase = (state.time * 0.19 + cab.index * 0.29 + k * 0.5) % 1;
+      const p3 = sampleCable(cab, phase * cab.len);
+      const p = project(p3, c);
+      if (!p) continue;
+      items.push({
+        kind: 'pulse', depth: p.z - 0.02, x: p.x, y: p.y,
+        r: Math.max(3.5, p.s * 0.045), color: cab.light, glow: cab.color, alpha: 0.32
+      });
+    }
+  }
+  // packets: bright comet with a short tail
+  for (const p of packets) {
+    if (!p.link) continue;
+    const cab = cables[p.link.cable];
+    const s = clamp(p.t, 0, 1) * cab.len;
+    const dir = p.link.reverse ? -1 : 1;
+    const tail = 0.55;
+    for (let k = 0; k < 5; k++) {
+      const ss = clamp(s - dir * (k / 4) * tail, 0, cab.len);
+      const p3 = sampleCable(cab, ss);
+      const sp = project(p3, c);
+      if (!sp) continue;
+      const fade = 1 - k / 5;
+      items.push({
+        kind: 'pulse',
+        depth: sp.z - 0.05 + k * 0.001,
+        x: sp.x, y: sp.y,
+        r: Math.max(3, sp.s * (k === 0 ? 0.075 : 0.05 * fade)),
+        color: [255, 255, 250],
+        glow: cab.color,
+        alpha: k === 0 ? 0.95 : 0.5 * fade
+      });
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Renderers for item kinds
+ * ------------------------------------------------------------------ */
+function paintFace(it) {
+  ctx.globalAlpha = it.alpha;
+  const g = ctx.createLinearGradient(0, it.gy0, 0, it.gy1);
+  g.addColorStop(0, it.c0);
+  g.addColorStop(1, it.c1);
+  ctx.fillStyle = g;
+  polyPath(it.poly, 0.55);
+  ctx.fill();
+  if (it.edge) {
+    ctx.strokeStyle = it.edge;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function paintCableSeg(it) {
+  const [a, b] = it.pts;
+  const al = it.alpha ?? 1;
+  ctx.lineCap = 'butt';
+  // soft halo
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = rgba(it.glow, 0.045 * al);
+  ctx.lineWidth = it.w * 3.8;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.strokeStyle = rgba(it.glow, 0.075 * al);
+  ctx.lineWidth = it.w * 1.9;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  // saturated body: painted over, so the cable keeps its gold / cyan identity
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.strokeStyle = rgba(it.color, 0.97 * al);
+  ctx.lineWidth = it.w;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  // hot filament down the middle
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = rgba(it.light || it.color, 0.32 * al);
+  ctx.lineWidth = Math.max(0.7, it.w * 0.42);
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function paintPulse(it) {
+  ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(it.x, it.y, 0, it.x, it.y, it.r * 3.2);
+  g.addColorStop(0, `rgba(255,255,252,${0.95 * it.alpha})`);
+  g.addColorStop(0.18, rgba(it.color, 0.9 * it.alpha));
+  g.addColorStop(0.42, rgba(it.glow, 0.35 * it.alpha));
+  g.addColorStop(1, rgba(it.glow, 0));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(it.x, it.y, it.r * 3.2, 0, TAU);
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function paintGlow(it) {
+  ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(it.x, it.y, 0, it.x, it.y, it.r * 2.6);
+  g.addColorStop(0, `rgba(255,255,255,${0.9 * it.alpha})`);
+  g.addColorStop(0.3, rgba(it.color, 0.6 * it.alpha));
+  g.addColorStop(1, rgba(it.color, 0));
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(it.x, it.y, it.r * 2.6, 0, TAU); ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function paintRing(it) {
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = rgba(it.color, it.alpha);
+  ctx.lineWidth = Math.max(1, it.r * 0.16);
+  ctx.beginPath(); ctx.arc(it.x, it.y, it.r, 0, TAU); ctx.stroke();
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function paintPort(it) {
+  // socket
+  ctx.beginPath();
+  ctx.arc(it.x, it.y, it.r * 1.5, 0, TAU);
+  ctx.fillStyle = 'rgba(14,9,5,.9)';
+  ctx.fill();
+  ctx.strokeStyle = rgba(it.light, 0.28);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(it.x, it.y, 0, it.x, it.y, it.r * 2.2);
+  g.addColorStop(0, rgba(it.light, 0.95));
+  g.addColorStop(0.4, rgba(it.color, 0.5));
+  g.addColorStop(1, rgba(it.color, 0));
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(it.x, it.y, it.r * 2.2, 0, TAU); ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/* ------------------------------------------------------------------ *
+ *  Labels
+ * ------------------------------------------------------------------ */
+function roundedRect(x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
+}
+
+function drawLabels(c) {
+  lastLabelRects.length = 0;
+  if (!state.labels) return;
+  const narrow = W < 720;
+  const labelFont = narrow ? 11 : 12.5;
+  const subFont = narrow ? 9.5 : 11;
+  const center = project([0, 0, 0], c);
+  const cx = center ? center.x : W / 2;
+  const list = [];
+  for (const b of boxes) {
+    const p = project([b.x, b.y0 + b.h + 0.02, b.z], c);
+    if (!p) continue;
+    list.push({ p, id: b.id, sub: b.name, kind: 'box', color: cables[b.index].light });
+  }
+  if (state.morph > 0.28) {
+    const p = project([SWITCH.x, SWITCH.y0 + SWITCH.h + 0.02, SWITCH.z], c);
+    if (p) list.push({ p, id: SWITCH.id, sub: 'central switch', kind: 'switch', color: [186, 240, 255] });
+  }
+
+  // measure, then choose a free slot for each plate
+  const padX = 8, padY = 6;
+  const placed = [];
+  const m = 8;
+  const overlapArea = (a, b) => {
+    const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+    const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+    return ox > 0 && oy > 0 ? ox * oy : 0;
+  };
+  for (const L of list) {
+    ctx.font = `600 ${labelFont}px "Avenir Next", "Helvetica Neue", Arial, sans-serif`;
+    const w1 = ctx.measureText(L.id).width;
+    ctx.font = `500 ${subFont}px "Avenir Next", "Helvetica Neue", Arial, sans-serif`;
+    const w2 = ctx.measureText(L.sub).width;
+    const boxW = Math.max(w1, w2) + padX * 2 + 5;
+    const boxH = labelFont + subFont + padY * 2 + 3;
+    const out = Math.sign(L.p.x - cx) || 1;
+    const side = L.kind === 'switch' ? 0 : out;
+    const up = L.kind === 'switch' ? 22 : 28;
+    const rightAligned = L.kind === 'switch' ? false : L.p.x < cx;
+    const cands = [
+      [side * 14, -up],
+      [side * 8, -up],
+      [side * 26, -up],
+      [side * 14, up * 0.65],
+      [side * 14, -up - 36],
+      [side * 30, up * 0.65],
+      [0, -up],
+      [side * 34, -up - 34]
+    ];
+    let best = null;
+    for (let ci = 0; ci < cands.length; ci++) {
+      const [dx, dy] = cands[ci];
+      let bx = (rightAligned ? L.p.x + dx - boxW : L.p.x + dx);
+      let by = L.p.y + dy - (dy < 0 ? boxH : 0);
+      bx = clamp(bx, m, W - boxW - m);
+      by = clamp(by, m + 4, H - boxH - m);
+      const rect = { x: bx, y: by, w: boxW, h: boxH };
+      let score = ci * 6;
+      for (const o of hudObstacles) score += overlapArea(rect, o) * 0.09;
+      for (const q of placed) score += overlapArea(rect, { x: q.bx, y: q.by, w: q.boxW, h: q.boxH }) * 0.12;
+      // keep the leader short
+      score += (Math.abs(dx) + Math.abs(dy) + boxH) * 0.04;
+      if (!best || score < best.score) best = { score, bx, by, right: rightAligned };
+    }
+    if (best) placed.push({ L, bx: best.bx, by: best.by, boxW, boxH, right: best.right });
+  }
+
+  ctx.textBaseline = 'middle';
+  for (const q of placed) {
+    const { L, bx, by, boxW, boxH } = q;
+    const anchorX = L.p.x, anchorY = L.p.y;
+    // the switch plate fades in with its box instead of popping
+    const la = L.kind === 'switch' ? clamp((state.morph - 0.28) / 0.34, 0, 1) : 1;
+    ctx.globalAlpha = la;
+
+    // leader to the nearest bottom corner of the plate
+    const joinX = q.right ? bx + boxW : bx;
+    const joinY = by + boxH;
+    ctx.strokeStyle = L.kind === 'switch' ? 'rgba(150,236,255,.5)' : 'rgba(240,205,150,.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(anchorX, anchorY);
+    ctx.lineTo(joinX, joinY);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(anchorX, anchorY, 2.2, 0, TAU);
+    ctx.fillStyle = L.kind === 'switch' ? 'rgba(180,244,255,.92)' : 'rgba(248,220,168,.9)';
+    ctx.fill();
+
+    // plate
+    roundedRect(bx, by, boxW, boxH, 3);
+    ctx.fillStyle = 'rgba(11,7,4,.8)';
+    ctx.fill();
+    ctx.strokeStyle = L.kind === 'switch' ? 'rgba(150,236,255,.36)' : 'rgba(233,191,124,.34)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    // state tick
+    ctx.fillStyle = rgba(L.color, 0.9);
+    ctx.fillRect(bx + 1, by + 3, 2, boxH - 6);
+
+    ctx.textAlign = 'left';
+    ctx.font = `600 ${labelFont}px "Avenir Next", "Helvetica Neue", Arial, sans-serif`;
+    ctx.fillStyle = '#f8ecd6';
+    ctx.fillText(L.id, bx + padX + 3, by + padY + labelFont * 0.52);
+    ctx.font = `500 ${subFont}px "Avenir Next", "Helvetica Neue", Arial, sans-serif`;
+    ctx.fillStyle = L.kind === 'switch' ? 'rgba(178,234,245,.88)' : 'rgba(196,170,134,.95)';
+    ctx.fillText(L.sub, bx + padX + 3, by + padY + labelFont + 4 + subFont * 0.5);
+
+    lastLabelRects.push({ id: L.id, x: bx, y: by, w: boxW, h: boxH });
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+}
+
+/* ------------------------------------------------------------------ *
+ *  Frame
+ * ------------------------------------------------------------------ */
+const items = [];
+const lastLabelRects = [];
+let hudObstacles = [];
+function refreshHudRects() {
+  hudObstacles = [];
+  for (const sel of ['.masthead', '.panel', '.hints', '.route']) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
+    hudObstacles.push({ x: r.x - 8, y: r.y - 8, w: r.width + 16, h: r.height + 16 });
+  }
+}
+let lastFrame = 0, fpsEMA = 16.7, frameCounter = 0;
+
+function render() {
+  const c = getCamera();
+  // background
+  const bg = ctx.createRadialGradient(W * 0.5, H * 0.40, 0, W * 0.5, H * 0.44, Math.max(W, H) * 0.86);
+  bg.addColorStop(0, '#241709');
+  bg.addColorStop(0.32, '#150f0a');
+  bg.addColorStop(0.66, '#0b0807');
+  bg.addColorStop(1, '#060505');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // faint back wall wash, gives the table an horizon
+  const wall = ctx.createLinearGradient(0, 0, 0, H * 0.62);
+  wall.addColorStop(0, 'rgba(84,54,26,.18)');
+  wall.addColorStop(1, 'rgba(84,54,26,0)');
+  ctx.fillStyle = wall;
+  ctx.fillRect(0, 0, W, H * 0.62);
+
+  drawTable(c);
+  drawTableInlay(c);
+  drawTableLight(c);
+
+  // shadows before objects
+  for (const b of boxes) drawGroundShadow(b, c, 1);
+  if (state.morph > 0.05) drawGroundShadow({ x: 0, z: 0, w: SWITCH.w, d: SWITCH.d, index: 0 }, c, smoothstep(0.05, 0.7, state.morph));
+
+  items.length = 0;
+
+  // tabletop glow pool (light fixture reflection)
+  // (drawn before boxes, after shadows)
+
+  // boxes
+  for (const b of boxes) {
+    collectCuboidFaces({ x: b.x, z: b.z, w: b.w, h: b.h, d: b.d, y0: 0, type: 'gold' }, c, items);
+    collectTopDetails(b, c, items, {});
+  }
+
+  // switch
+  const sm = smoothstep(0.1, 0.75, state.morph);
+  if (sm > 0.01) {
+    const sc = 0.86 + 0.14 * smoothstep(0.1, 0.9, state.morph);
+    collectCuboidFaces({
+      x: 0, z: 0, w: SWITCH.w * sc, h: SWITCH.h * sc, d: SWITCH.d * sc,
+      y0: 0, type: 'graphite', alpha: sm
+    }, c, items);
+    collectSwitchTop(c, items, sm, sc);
+  }
+
+  collectCables(c, items);
+  collectPulses(c, items);
+
+  items.sort((a, b) => b.depth - a.depth);
+  for (const it of items) {
+    switch (it.kind) {
+      case 'face': paintFace(it); break;
+      case 'cableSeg': paintCableSeg(it); break;
+      case 'pulse': paintPulse(it); break;
+      case 'glow': paintGlow(it); break;
+      case 'ring': paintRing(it); break;
+      case 'port': paintPort(it); break;
+      case 'polyline':
+        ctx.beginPath();
+        ctx.moveTo(it.poly[0].x, it.poly[0].y);
+        for (let i = 1; i < it.poly.length; i++) ctx.lineTo(it.poly[i].x, it.poly[i].y);
+        ctx.closePath();
+        ctx.strokeStyle = it.color; ctx.lineWidth = it.width; ctx.stroke();
+        break;
+    }
+  }
+
+  drawLabels(c);
+}
+
+/* ------------------------------------------------------------------ *
+ *  HUD
+ * ------------------------------------------------------------------ */
+const body = document.body;
+const btnRing = document.getElementById('btn-ring');
+const btnSwitch = document.getElementById('btn-switch');
+const btnLabels = document.getElementById('btn-labels');
+const topoState = document.getElementById('topo-state');
+const topoNote = document.getElementById('topo-note');
+const routePathEl = document.getElementById('route-path');
+const routeViaEl = document.getElementById('route-via');
+const liveEl = document.getElementById('live');
+
+const SCENE_DESC = {
+  ring: 'Four gold desktop AI boxes arranged in a ring on a walnut table. Glowing cables join neighbouring boxes, with bright data pulses travelling along them. Drag to orbit the camera.',
+  switch: 'Four gold desktop AI boxes on a walnut table, each cabled to a central aluminium switch box in the middle of the table. Bright data pulses travel the cables to and from the switch. Drag to orbit the camera.'
+};
+const NOTES = {
+  ring: 'Four cables run box to box in a loop. A message for the far corner crosses two links, relayed by the box in between.',
+  switch: 'The same four cables now land on SW-01 in the middle. Every box reaches the other three through the switch.'
+};
+
+function setMode(mode, announce) {
+  if (mode !== 'ring' && mode !== 'switch') return;
+  const changed = state.mode !== mode;
+  state.mode = mode;
+  body.dataset.mode = mode;
+  btnRing.setAttribute('aria-pressed', String(mode === 'ring'));
+  btnSwitch.setAttribute('aria-pressed', String(mode === 'switch'));
+  topoState.textContent = mode === 'ring' ? 'Ring' : 'Switch';
+  topoNote.textContent = NOTES[mode];
+  canvas.setAttribute('aria-label', SCENE_DESC[mode]);
+  requestAnimationFrame(refreshHudRects);
+  if (changed) {
+    reroutePackets();
+    if (announce) {
+      liveEl.textContent = mode === 'ring'
+        ? 'Ring topology. Four cables join neighbouring boxes.'
+        : 'Switch topology. All four cables now meet at the central switch, SW-01.';
+    }
+  }
+}
+function toggleMode() { setMode(state.mode === 'ring' ? 'switch' : 'ring', true); }
+
+btnRing.addEventListener('click', () => setMode('ring', true));
+btnSwitch.addEventListener('click', () => setMode('switch', true));
+btnLabels.addEventListener('click', () => {
+  state.labels = !state.labels;
+  btnLabels.setAttribute('aria-pressed', String(state.labels));
+  btnLabels.textContent = state.labels ? 'Labels on' : 'Labels off';
+  requestAnimationFrame(refreshHudRects);
+});
+
+function routeSummary() {
+  let best = null;
+  for (const p of packets) {
+    if (!p.link) continue;
+    const prog = (p.idx + (p.link.reverse ? 1 - p.t : p.t)) / Math.max(1, p.path.length - 1);
+    if (!best || prog > best.prog || (prog === best.prog && p.age < best.p.age)) best = { p, prog };
+  }
+  if (!best) return null;
+  const p = best.p;
+  let via = 'direct link';
+  if (p.path.length === 3) via = p.path[1] === 'S' ? 'via SW-01, two links' : `via ${nodeName(p.path[1])}, two links`;
+  else if (p.path.length === 2) via = 'one link';
+  const from = nodeName(p.path[0]);
+  const to = nodeName(p.path[p.path.length - 1]);
+  return { path: `${from} → ${to}`, via };
+}
+
+let hudTimer = 0;
+function syncHUD(dt) {
+  hudTimer -= dt;
+  if (hudTimer > 0) return;
+  hudTimer = 0.22;
+  const r = routeSummary();
+  if (r) {
+    routePathEl.textContent = r.path;
+    routeViaEl.textContent = r.via;
+    lastRouteSummary = r;
+  } else if (!lastRouteSummary) {
+    routePathEl.textContent = 'Waiting for traffic';
+    routeViaEl.textContent = 'pulses run on every link';
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Interaction
+ * ------------------------------------------------------------------ */
+const pointers = new Map();
+let dragStart = null;
+let pinchStart = null;
+
+function markUserCam() { userTouchedCam.value = true; }
+
+canvas.addEventListener('pointerdown', e => {
+  canvas.focus({ preventScroll: true });
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 1) {
+    state.dragging = true;
+    canvas.classList.add('is-dragging');
+    dragStart = { x: e.clientX, y: e.clientY };
+    cam.vAz = 0; cam.vEl = 0;
+  } else if (pointers.size === 2) {
+    const pts = [...pointers.values()];
+    pinchStart = {
+      d: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y),
+      zoom: cam.zoom
+    };
+  }
+});
+canvas.addEventListener('pointermove', e => {
+  const prev = pointers.get(e.pointerId);
+  if (!prev) return;
+  const dx = e.clientX - prev.x;
+  const dy = e.clientY - prev.y;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2 && pinchStart) {
+    const pts = [...pointers.values()];
+    const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    cam.zoom = clamp(pinchStart.zoom * (d / Math.max(12, pinchStart.d)), 0.72, 2.0);
+    markUserCam();
+    return;
+  }
+  if (state.dragging) {
+    const k = 0.0062;
+    cam.az -= dx * k;
+    cam.el = clamp(cam.el + dy * 0.0052, 0.10, 1.26);
+    cam.vAz = -dx * k * 0.6;
+    cam.vEl = dy * 0.0052 * 0.6;
+    markUserCam();
+  }
+});
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinchStart = null;
+  if (pointers.size === 0) {
+    state.dragging = false;
+    canvas.classList.remove('is-dragging');
+  }
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('pointerleave', e => { if (pointers.has(e.pointerId) && e.buttons === 0) endPointer(e); });
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  cam.zoom = clamp(cam.zoom * Math.exp(-e.deltaY * 0.0012), 0.72, 2.0);
+  markUserCam();
+}, { passive: false });
+
+canvas.addEventListener('dblclick', resetView);
+
+function resetView() {
+  userTouchedCam.value = false;
+  cam.zoom = 1;
+  const portrait = W / H < 0.92;
+  cam.az = portrait ? 0.72 : 0.58;
+  cam.el = portrait ? 0.62 : 0.40;
+  cam.vAz = 0; cam.vEl = 0;
+}
+
+window.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key;
+  if (k === 't' || k === 'T') { toggleMode(); e.preventDefault(); }
+  else if (k === 'r' || k === 'R') { resetView(); e.preventDefault(); }
+  else if (k === 'l' || k === 'L') { btnLabels.click(); e.preventDefault(); }
+  else if (k === 'ArrowLeft') { cam.az += 0.09; markUserCam(); e.preventDefault(); }
+  else if (k === 'ArrowRight') { cam.az -= 0.09; markUserCam(); e.preventDefault(); }
+  else if (k === 'ArrowUp') { cam.el = clamp(cam.el + 0.06, 0.1, 1.26); markUserCam(); e.preventDefault(); }
+  else if (k === 'ArrowDown') { cam.el = clamp(cam.el - 0.06, 0.1, 1.26); markUserCam(); e.preventDefault(); }
+  else if (k === '+' || k === '=') { cam.zoom = clamp(cam.zoom * 1.08, 0.72, 2.0); markUserCam(); }
+  else if (k === '-' || k === '_') { cam.zoom = clamp(cam.zoom / 1.08, 0.72, 2.0); markUserCam(); }
+});
+
+function updateCamera(dt) {
+  if (!state.dragging) {
+    if (Math.abs(cam.vAz) > 1e-4 || Math.abs(cam.vEl) > 1e-4) {
+      if (!reduceMotion) {
+        cam.az += cam.vAz * dt * 8;
+        cam.el = clamp(cam.el + cam.vEl * dt * 8, 0.10, 1.26);
+      }
+      const damp = Math.pow(0.02, dt);
+      cam.vAz *= damp;
+      cam.vEl *= damp;
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Loop
+ * ------------------------------------------------------------------ */
+function updateMorph(dt) {
+  const target = state.mode === 'switch' ? 1 : 0;
+  const rate = reduceMotion ? 12 : 3.4;
+  state.morph += (target - state.morph) * (1 - Math.exp(-dt * rate));
+  if (Math.abs(target - state.morph) < 0.0008) state.morph = target;
+}
+
+let running = true;
+function frame(now) {
+  if (!lastFrame) lastFrame = now;
+  let dt = (now - lastFrame) / 1000;
+  lastFrame = now;
+  if (dt > 0.06) dt = 0.06;
+  fpsEMA = fpsEMA * 0.92 + (dt * 1000) * 0.08;
+
+  if (!freezeTime) state.time += dt;
+  frameCounter++;
+  // one-way adaptive resolution: keep motion smooth on slow GPUs / huge canvases
+  if (frameCounter % 120 === 0 && frameCounter > 120 && quality > 0.8 && fpsEMA > 24) {
+    quality = Math.max(0.8, quality - 0.2);
+    resize();
+  }
+  updateMorph(dt);
+  updateCamera(dt);
+  updateCables();
+  updateTraffic(dt);
+  render();
+  syncHUD(dt);
+  requestAnimationFrame(frame);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Boot
+ * ------------------------------------------------------------------ */
+// procedural grain tile (no external asset)
+(function makeGrain() {
+  const tile = document.createElement('canvas');
+  tile.width = tile.height = 128;
+  const g = tile.getContext('2d');
+  const img = g.createImageData(128, 128);
+  const r = mulberry32(4242);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = 120 + Math.round((r() - 0.5) * 150);
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+    img.data[i + 3] = 26;
+  }
+  g.putImageData(img, 0, 0);
+  document.querySelector('.grain').style.backgroundImage = `url(${tile.toDataURL()})`;
+})();
+
+let freezeTime = false;
+
+// URL parameters for reproducible inspection: ?mode=switch&az=0.6&el=0.4&zoom=1.1&labels=0&still=1
+const params = new URLSearchParams(location.search);
+if (params.get('labels') === '0') { state.labels = false; btnLabels.textContent = 'Labels off'; btnLabels.setAttribute('aria-pressed', 'false'); }
+if (params.has('az')) { cam.az = parseFloat(params.get('az')); userTouchedCam.value = true; }
+if (params.has('el')) { cam.el = clamp(parseFloat(params.get('el')), 0.1, 1.26); userTouchedCam.value = true; }
+if (params.has('zoom')) { cam.zoom = clamp(parseFloat(params.get('zoom')), 0.72, 2.0); userTouchedCam.value = true; }
+if (params.get('still') === '1') freezeTime = true;
+if (params.get('mode') === 'switch') {
+  state.mode = 'switch';
+  state.morph = 1;
+  body.dataset.mode = 'switch';
+  btnRing.setAttribute('aria-pressed', 'false');
+  btnSwitch.setAttribute('aria-pressed', 'true');
+  topoState.textContent = 'Switch';
+  topoNote.textContent = NOTES.switch;
+  canvas.setAttribute('aria-label', SCENE_DESC.switch);
+  liveEl.textContent = 'Switch topology. All four cables now meet at the central switch, SW-01.';
+}
+
+resize();
+refreshHudRects();
+window.addEventListener('resize', () => { resize(); refreshHudRects(); });
+window.addEventListener('load', refreshHudRects);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(refreshHudRects);
+updateCables();
+// pre-seed a couple of packets so the scene is alive immediately
+spawnPacket();
+spawnPacket();
+requestAnimationFrame(frame);
+
+// small hook used by the render checks
+window.__rack = {
+  state, cam, packets, cables, boxes, SWITCH,
+  setMode,
+  resetView,
+  freeze(v = true) { freezeTime = v; },
+  fps: () => fpsEMA,
+  frameCount: () => frameCounter,
+  itemCount: () => items.length,
+  quality: () => quality,
+  labels: () => lastLabelRects.map(r => ({ ...r })),
+  hudRects() {
+    const rect = el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+    return {
+      masthead: rect(document.querySelector('.masthead')),
+      panel: rect(document.querySelector('.panel')),
+      hints: rect(document.querySelector('.hints')),
+      route: rect(document.querySelector('.route'))
+    };
+  },
+  layout() {
+    const c = getCamera();
+    const out = { W, H, boxes: [], switch: null, cables: [], camera: { eye: c.eye, f: c.f } };
+    for (const b of boxes) {
+      const top = project([b.x, b.h, b.z], c);
+      const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sz]) =>
+        project([b.x + sx * b.w / 2, b.h, b.z + sz * b.d / 2], c));
+      out.boxes.push({ id: b.id, top, corners });
+    }
+    const sTop = project([0, SWITCH.h, 0], c);
+    out.switch = {
+      top: sTop,
+      alpha: smoothstep(0.1, 0.75, state.morph),
+      topCorners: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sz]) =>
+        project([sx * SWITCH.w / 2, SWITCH.h, sz * SWITCH.d / 2], c)),
+      baseCorners: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sz]) =>
+        project([sx * SWITCH.w / 2, 0, sz * SWITCH.d / 2], c))
+    };
+    for (const cab of cables) {
+      const mid = cab.pts[Math.floor(cab.pts.length / 2)];
+      out.cables.push({
+        index: cab.index,
+        a: project(cab.a, c), b: project(cab.b, c), mid: project(mid, c),
+        len: cab.len
+      });
+    }
+    return out;
+  },
+  projectPoint(p) { const q = project(p, getCamera()); return q ? { x: q.x, y: q.y, s: q.s } : null; },
+  sampleCable(i, t) { const q = project(sampleCable(cables[i], t * cables[i].len), getCamera()); return q ? { x: q.x, y: q.y } : null; },
+  probe(x, y) {
+    const d = ctx.getImageData(Math.round(x * DPR), Math.round(y * DPR), 1, 1).data;
+    return [d[0], d[1], d[2]];
+  }
+};
+})();
+</script>
+</body>
+</html>

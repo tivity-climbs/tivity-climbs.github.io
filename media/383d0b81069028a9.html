@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spark Rack 3D: ring vs switch</title>
+<style>
+  :root{--gold:#f2c46d;--ink:#efe6d6;--dim:#a89a86;--cy:#5fd8ff;--amb:#ffae4a}
+  html,body{margin:0;height:100%;background:#0b0907;overflow:hidden;color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+  #c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab;outline:none}
+  #c.drag{cursor:grabbing}
+  #labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}
+  .lbl{position:absolute;left:0;top:0;will-change:transform;transition:opacity .35s}
+  .lbl .tag{position:absolute;bottom:22px;left:0;transform:translateX(-50%);white-space:nowrap;
+    background:rgba(14,11,8,.78);border:1px solid rgba(242,196,109,.38);border-radius:7px;
+    padding:5px 9px 6px;font:500 11px/1.35 ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    letter-spacing:.02em;box-shadow:0 4px 18px rgba(0,0,0,.45);backdrop-filter:blur(3px)}
+  .lbl .tag b{display:block;font:700 12px/1.3 ui-sans-serif,system-ui,sans-serif;letter-spacing:.12em;color:var(--gold)}
+  .lbl .tag i{font-style:normal;color:var(--dim)}
+  .lbl .tag .link{color:var(--cy)}
+  .lbl::after{content:"";position:absolute;left:-.5px;bottom:2px;width:1px;height:20px;
+    background:linear-gradient(to top,rgba(242,196,109,.0),rgba(242,196,109,.75))}
+  .lbl::before{content:"";position:absolute;left:-3px;bottom:-1px;width:6px;height:6px;border-radius:50%;
+    background:var(--gold);box-shadow:0 0 8px var(--gold)}
+  .lbl.sw .tag{border-color:rgba(95,216,255,.45)}
+  .lbl.sw .tag b{color:var(--cy)}
+  .lbl.sw::before{background:var(--cy);box-shadow:0 0 8px var(--cy)}
+  .lbl.sw::after{background:linear-gradient(to top,rgba(95,216,255,0),rgba(95,216,255,.8))}
+  .lbl.cab .tag{border-color:rgba(95,216,255,.3);font-size:10px;padding:3px 7px}
+  .lbl.cab::before{background:var(--cy);box-shadow:0 0 8px var(--cy)}
+  .lbl.cab::after{background:linear-gradient(to top,rgba(95,216,255,0),rgba(95,216,255,.6))}
+  header{position:fixed;left:28px;top:22px;pointer-events:none;max-width:min(520px,80vw)}
+  header h1{margin:0;font:800 15px/1.2 ui-sans-serif,system-ui,sans-serif;letter-spacing:.32em;color:var(--gold);text-transform:uppercase}
+  header p{margin:6px 0 0;font-size:13px;color:var(--dim)}
+  #panel{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:10px}
+  #topo{appearance:none;border:1px solid rgba(242,196,109,.5);background:rgba(16,12,8,.82);color:var(--ink);
+    border-radius:999px;padding:4px;display:flex;gap:0;cursor:pointer;font:700 13px/1 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.14em;text-transform:uppercase;box-shadow:0 8px 30px rgba(0,0,0,.5);position:relative}
+  #topo:focus-visible{outline:2px solid var(--cy);outline-offset:3px}
+  #topo .seg{position:relative;z-index:1;padding:11px 22px;border-radius:999px;transition:color .3s;color:var(--dim)}
+  #topo .seg.on{color:#1a1206}
+  #topo .pill{position:absolute;top:4px;bottom:4px;left:4px;width:calc(50% - 4px);border-radius:999px;
+    background:linear-gradient(180deg,#ffd98c,#d9a443);transition:transform .45s cubic-bezier(.6,.1,.2,1);box-shadow:0 0 18px rgba(242,196,109,.45)}
+  #topo[aria-pressed="true"] .pill{transform:translateX(100%);background:linear-gradient(180deg,#9ae9ff,#3bb7e6);box-shadow:0 0 18px rgba(95,216,255,.5)}
+  #desc{font-size:12.5px;color:#cfc2ad;text-align:center;min-height:1.4em;background:rgba(14,11,8,.72);padding:5px 12px;border-radius:6px;max-width:90vw}
+  #desc em{font-style:normal;color:var(--ink)}
+  #hint{position:fixed;right:24px;bottom:26px;font:500 11px/1.6 ui-monospace,Menlo,monospace;color:#b3a590;background:rgba(14,11,8,.7);padding:6px 10px;border-radius:6px;text-align:right;pointer-events:none}
+  #legend{position:fixed;right:24px;top:24px;font:500 11px/1.8 ui-monospace,Menlo,monospace;color:var(--dim);pointer-events:none;text-align:right}
+  #legend span{display:inline-block;width:18px;height:3px;border-radius:2px;vertical-align:middle;margin-left:8px}
+  #err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font-size:15px;color:var(--gold);text-align:center;padding:30px}
+  @media (max-width:640px){.lbl .tag{font-size:9px;padding:3px 6px 4px}.lbl .tag b{font-size:10px}.lbl .tag i{display:none}.lbl.box .tag br{display:none}.lbl.box .link{display:none}.lbl.cab{display:none}#legend{display:none}header{left:16px;top:14px}header p{display:none}#hint{display:none}#legend{top:auto;bottom:120px;right:14px}}
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0" aria-label="3D view of four gold desktop AI boxes on a wooden table connected by glowing cables. Drag to orbit, scroll to zoom."></canvas>
+<div id="labels" aria-hidden="true"></div>
+<header>
+  <h1>Spark Rack</h1>
+  <p>Four desktop AI boxes, one walnut table. Data pulses travel along the links.</p>
+</header>
+<div id="legend" aria-hidden="true">
+  <div>node → peer / uplink<span style="background:var(--cy);box-shadow:0 0 6px var(--cy)"></span></div>
+  <div id="lgRev" style="opacity:.25">switch → node<span style="background:var(--amb);box-shadow:0 0 6px var(--amb)"></span></div>
+</div>
+<div id="panel">
+  <button id="topo" type="button" aria-pressed="false" aria-label="Toggle cable topology between ring and switch. Current: ring">
+    <span class="pill"></span><span class="seg on" data-k="ring">Ring</span><span class="seg" data-k="switch">Switch</span>
+  </button>
+  <div id="desc" aria-live="polite"></div>
+</div>
+<div id="hint">drag · orbit &nbsp; scroll/pinch · zoom<br>T · toggle topology &nbsp; R · reset view</div>
+<div id="err"></div>
+<script>
+(function(){
+"use strict";
+const cv = document.getElementById('c');
+const errBox = document.getElementById('err');
+function fail(msg){ errBox.style.display='flex'; errBox.textContent = msg; console.error(msg); }
+const gl = cv.getContext('webgl', {antialias:true, alpha:false, depth:true, premultipliedAlpha:false, preserveDrawingBuffer:false});
+if(!gl){ fail('WebGL is not available in this browser.'); return; }
+cv.addEventListener('webglcontextlost', e=>{ e.preventDefault(); fail('WebGL context lost — reload the page.'); });
+
+/* ---------------- math ---------------- */
+const M4 = {
+  persp(fy, a, n, f){ const t=1/Math.tan(fy/2), r=1/(n-f); return new Float32Array([t/a,0,0,0, 0,t,0,0, 0,0,(n+f)*r,-1, 0,0,2*n*f*r,0]); },
+  look(e, c, u){
+    let zx=e[0]-c[0], zy=e[1]-c[1], zz=e[2]-c[2]; let l=Math.hypot(zx,zy,zz); zx/=l; zy/=l; zz/=l;
+    let xx=u[1]*zz-u[2]*zy, xy=u[2]*zx-u[0]*zz, xz=u[0]*zy-u[1]*zx; l=Math.hypot(xx,xy,xz); xx/=l; xy/=l; xz/=l;
+    const yx=zy*xz-zz*xy, yy=zz*xx-zx*xz, yz=zx*xy-zy*xx;
+    return new Float32Array([xx,yx,zx,0, xy,yy,zy,0, xz,yz,zz,0,
+      -(xx*e[0]+xy*e[1]+xz*e[2]), -(yx*e[0]+yy*e[1]+yz*e[2]), -(zx*e[0]+zy*e[1]+zz*e[2]), 1]);
+  },
+  mul(a, b){ const o=new Float32Array(16);
+    for(let c=0;c<4;c++) for(let r=0;r<4;r++){ let s=0; for(let k=0;k<4;k++) s+=a[k*4+r]*b[c*4+k]; o[c*4+r]=s; } return o; },
+  ident(){ return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]); },
+  trs(tx,ty,tz, yaw, s){ const c=Math.cos(yaw), si=Math.sin(yaw);
+    return new Float32Array([c*s,0,-si*s,0, 0,s,0,0, si*s,0,c*s,0, tx,ty,tz,1]); }
+};
+const rotY = (v, a) => { const c=Math.cos(a), s=Math.sin(a); return [v[0]*c+v[2]*s, v[1], -v[0]*s+v[2]*c]; };
+const add = (a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+const sub = (a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const scl = (a,s)=>[a[0]*s,a[1]*s,a[2]*s];
+const dot = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const norm = a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2]/l]; };
+const lerp = (a,b,t)=>a+(b-a)*t;
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const smooth=(a,b,x)=>{ const t=clamp((x-a)/(b-a),0,1); return t*t*(3-2*t); };
+const mod=(x,m)=>((x%m)+m)%m;
+
+/* ---------------- mesh builder ---------------- */
+// vertex: pos3 nor3 col3 mat1 uv2  = 12 floats
+class Mesh{
+  constructor(){ this.d=[]; }
+  v(p,n,c,m,uv){ this.d.push(p[0],p[1],p[2],n[0],n[1],n[2],c[0],c[1],c[2],m,uv[0],uv[1]); }
+  quad(p, n, c, m, uv){ // p: 4 points, uv: 4 uvs
+    const u = uv || [[0,0],[1,0],[1,1],[0,1]];
+    const nn = Array.isArray(n[0]) ? n : [n,n,n,n];
+    this.v(p[0],nn[0],c,m,u[0]); this.v(p[1],nn[1],c,m,u[1]); this.v(p[2],nn[2],c,m,u[2]);
+    this.v(p[0],nn[0],c,m,u[0]); this.v(p[2],nn[2],c,m,u[2]); this.v(p[3],nn[3],c,m,u[3]);
+  }
+}
+// local->world transformer: yaw around Y then translate
+function Xf(t, yaw){ return { p:v=>add(rotY(v,yaw),t), n:v=>rotY(v,yaw) }; }
+const AX=[[1,0,0],[0,1,0],[0,0,1]];
+function faces(cb){ // for each of 6 faces: axis a, sign s, tangents u,v (axes indices)
+  for(let a=0;a<3;a++) for(const s of [1,-1]){ const u=(a+1)%3, w=(a+2)%3; cb(a,s,u,w); }
+}
+function box(m, X, c, h, col, mat){
+  faces((a,s,u,w)=>{
+    const n=[0,0,0]; n[a]=s;
+    const corner=(su,sw)=>{ const p=[c[0],c[1],c[2]]; p[a]+=s*h[a]; p[u]+=su*h[u]; p[w]+=sw*h[w]; return X.p(p); };
+    const pts = s>0 ? [corner(-1,-1),corner(1,-1),corner(1,1),corner(-1,1)] : [corner(-1,-1),corner(-1,1),corner(1,1),corner(1,-1)];
+    m.quad(pts, X.n(n), col, mat);
+  });
+}
+function roundedBox(m, X, c, h, r, col, mat, K){
+  K = K||4;
+  const coords = hh => { const o=[]; for(let k=0;k<=K;k++) o.push(-hh + r*k/K); for(let k=0;k<=K;k++) o.push(hh - r + r*k/K); return o; };
+  faces((a,s,u,w)=>{
+    const cu=coords(h[u]), cw=coords(h[w]);
+    const P=(x,y)=>{ const p=[0,0,0]; p[a]=s*h[a]; p[u]=x; p[w]=y;
+      const inner=[0,0,0], nn=[0,0,0];
+      for(let i=0;i<3;i++){ inner[i]=clamp(p[i],-(h[i]-r),h[i]-r); nn[i]=p[i]-inner[i]; }
+      const n=norm(nn); const q=[c[0]+inner[0]+n[0]*r, c[1]+inner[1]+n[1]*r, c[2]+inner[2]+n[2]*r];
+      return [X.p(q), X.n(n)];
+    };
+    for(let i=0;i<cu.length-1;i++) for(let j=0;j<cw.length-1;j++){
+      if(cu[i+1]-cu[i] < 1e-7 || cw[j+1]-cw[j] < 1e-7) continue;
+      const A=P(cu[i],cw[j]), B=P(cu[i+1],cw[j]), C=P(cu[i+1],cw[j+1]), D=P(cu[i],cw[j+1]);
+      const uvs=[[cu[i],cw[j]],[cu[i+1],cw[j]],[cu[i+1],cw[j+1]],[cu[i],cw[j+1]]];
+      m.quad([A[0],B[0],C[0],D[0]],[A[1],B[1],C[1],D[1]],col,mat,uvs);
+    }
+  });
+}
+// flat panel on a local face plane z = zc, facing sign sz (local units, uv = local metres)
+function panelZ(m, X, cx, cy, hx, hy, zc, sz, col, mat){
+  const p=[[cx-hx,cy-hy,zc],[cx+hx,cy-hy,zc],[cx+hx,cy+hy,zc],[cx-hx,cy+hy,zc]].map(X.p);
+  const uv=[[cx-hx,cy-hy],[cx+hx,cy-hy],[cx+hx,cy+hy],[cx-hx,cy+hy]];
+  m.quad(p, X.n([0,0,sz]), col, mat, uv);
+}
+
+/* ---------------- scene layout ---------------- */
+const MAT={WOOD:0,GOLD:1,FOAM:2,DARK:3,LED:4,FLOOR:5,GUN:6,PORT:7,BLINK:8,LEG:9};
+const BOX_H=[0.25,0.085,0.25], FEET=0.012, BOX_Y=FEET+BOX_H[1];
+const R_POS=0.64*Math.SQRT2; // radius of box centres
+const NAMES=['SPARK-01','SPARK-02','SPARK-03','SPARK-04'];
+const boxes=[];
+for(let i=0;i<4;i++){
+  const a=Math.PI/4 + i*Math.PI/2; // around Y in xz plane
+  const d=[Math.cos(a),0,Math.sin(a)];
+  const pos=[d[0]*R_POS,0,d[2]*R_POS];
+  const yaw=Math.atan2(d[0],d[2]); // local +z -> outward
+  boxes.push({i,pos,d,yaw});
+}
+const PORT_Z = BOX_H[2]+0.006, PORT_Y = BOX_Y-0.012;
+for(const b of boxes){
+  const X=Xf(b.pos,b.yaw);
+  b.portL = X.p([ 0.075, PORT_Y, -PORT_Z]);
+  b.portR = X.p([-0.075, PORT_Y, -PORT_Z]);
+  b.inward = scl(b.d,-1);
+}
+for(let i=0;i<4;i++){
+  const b=boxes[i], nx=boxes[(i+1)%4];
+  const dl=Math.hypot(b.portL[0]-nx.pos[0], b.portL[2]-nx.pos[2]), dr=Math.hypot(b.portR[0]-nx.pos[0], b.portR[2]-nx.pos[2]);
+  b.portA = dl<dr ? b.portL : b.portR; // toward next
+  b.portB = dl<dr ? b.portR : b.portL; // toward previous
+}
+const SW_H=[0.2,0.046,0.2], SW_Y=0.01+SW_H[1], SW_YAW=Math.PI/4;
+const SW_PORT_Y = SW_Y-0.004, SW_PORT_Z = SW_H[2]+0.006;
+for(const b of boxes){ b.swPort = add(rotY([0,0,SW_PORT_Z], b.yaw), [0,SW_PORT_Y,0]); }
+
+/* static scene mesh */
+const scene=new Mesh();
+{
+  const I=Xf([0,0,0],0);
+  const wood=[1,1,1];
+  // table top: 3.4 x 2.4, top surface at y=0
+  roundedBox(scene, I, [0,-0.045,0], [1.75,0.045,1.25], 0.012, wood, MAT.WOOD, 2);
+  // apron + legs
+  const legC=[0.75,0.75,0.75];
+  box(scene, I, [0,-0.14,1.12],[1.55,0.05,0.025], legC, MAT.LEG);
+  box(scene, I, [0,-0.14,-1.12],[1.55,0.05,0.025], legC, MAT.LEG);
+  box(scene, I, [1.62,-0.14,0],[0.025,0.05,1.08], legC, MAT.LEG);
+  box(scene, I, [-1.62,-0.14,0],[0.025,0.05,1.08], legC, MAT.LEG);
+  for(const sx of [-1,1]) for(const sz of [-1,1]) box(scene, I, [sx*1.6,-0.78,sz*1.1],[0.045,0.69,0.045], legC, MAT.LEG);
+  // floor
+  const F=-1.47, S=14;
+  scene.quad([[-S,F,-S],[S,F,-S],[S,F,S],[-S,F,S]],[0,1,0],[1,1,1],MAT.FLOOR,[[-S,-S],[S,-S],[S,S],[-S,S]]);
+  // gold boxes
+  for(const b of boxes){
+    const X=Xf(b.pos,b.yaw), hx=BOX_H[0], hy=BOX_H[1], hz=BOX_H[2];
+    roundedBox(scene, X, [0,BOX_Y,0], BOX_H, 0.026, [1,1,1], MAT.GOLD, 5);
+    box(scene, X, [0,FEET/2,0],[hx-0.05,FEET/2,hz-0.05],[0.02,0.02,0.02],MAT.DARK);
+    // front metal-foam panel and back port panel
+    panelZ(scene, X, 0, BOX_Y, hx-0.032, hy-0.026, hz+0.0012, 1, [1,1,1], MAT.FOAM);
+    panelZ(scene, X, 0, BOX_Y, hx-0.032, hy-0.026, -hz-0.0012, -1, [1,1,1], MAT.FOAM);
+    // dark I/O strip on the back
+    panelZ(scene, X, 0, PORT_Y, hx-0.05, 0.022, -hz-0.0022, -1, [0.03,0.028,0.026], MAT.DARK);
+    for(const px of [0.075,-0.075]){
+      box(scene, X, [px,PORT_Y,-hz-0.004],[0.019,0.011,0.003],[0.01,0.01,0.012],MAT.PORT);
+      box(scene, X, [px+(px>0?0.03:-0.03),PORT_Y+0.008,-hz-0.003],[0.003,0.003,0.001],[0.25,1.0,0.45],MAT.BLINK);
+    }
+    box(scene, X, [0,PORT_Y,-hz-0.004],[0.008,0.006,0.002],[0.01,0.01,0.012],MAT.PORT); // usb-c
+    // front status LED
+    box(scene, X, [hx-0.06,FEET+0.012,hz+0.003],[0.009,0.0018,0.001],[0.6,0.95,1.0],MAT.LED);
+  }
+}
+/* switch mesh (local, animated via model matrix) */
+const swMesh=new Mesh();
+{
+  const I=Xf([0,0,0],0);
+  roundedBox(swMesh, I, [0,SW_Y,0], SW_H, 0.012, [0.32,0.33,0.36], MAT.GUN, 3);
+  box(swMesh, I, [0,0.005,0],[SW_H[0]-0.03,0.005,SW_H[2]-0.03],[0.02,0.02,0.02],MAT.DARK);
+  // ports on each side (local frame of each face) + activity leds
+  for(let k=0;k<4;k++){
+    const X=Xf([0,0,0], k*Math.PI/2);
+    panelZ(swMesh, X, 0, SW_Y, 0.16, 0.024, SW_H[2]+0.0012, 1, [0.03,0.03,0.035], MAT.DARK);
+    for(let p=-2;p<=2;p++){
+      const isMain = p===0;
+      box(swMesh, X, [p*0.055, SW_PORT_Y, SW_H[2]+0.003],[isMain?0.019:0.013,0.011,0.003],[0.008,0.008,0.01],MAT.PORT);
+      box(swMesh, X, [p*0.055, SW_PORT_Y+0.017, SW_H[2]+0.0022],[0.004,0.0025,0.001], isMain?[0.3,1.0,0.5]:[0.9,0.55,0.15], isMain?MAT.BLINK:MAT.LED);
+    }
+  }
+  // glowing status frame on top
+  const t=SW_H[1]*2+0.0102, a=SW_H[0]-0.03, w=0.004, c=[0.3,0.85,1.0];
+  for(let k=0;k<4;k++){ const X=Xf([0,0,0],k*Math.PI/2);
+    const p=[[-a,t,a-w],[a,t,a-w],[a,t,a+w],[-a,t,a+w]].map(X.p); swMesh.quad(p,[0,1,0],c,MAT.LED); }
+}
+/* blob shadows: pos3 q2 inner2 soft1 strength1 = 9 */
+function shadowQuad(arr, X, y, hx, hz, soft, str){
+  const ex=hx+soft*1.5, ez=hz+soft*1.5;
+  const corners=[[-ex,-ez],[ex,-ez],[ex,ez],[-ex,ez]];
+  const P=corners.map(q=>X.p([q[0],y,q[1]]));
+  const idx=[0,1,2,0,2,3];
+  for(const k of idx) arr.push(P[k][0],P[k][1],P[k][2], corners[k][0],corners[k][1], hx,hz, soft, str);
+}
+const shadowArr=[], swShadowArr=[];
+for(const b of boxes){ const X=Xf(b.pos,b.yaw); shadowQuad(shadowArr,X,0.0009,BOX_H[0]-0.01,BOX_H[2]-0.01,0.05,0.75); shadowQuad(shadowArr,X,0.0011,BOX_H[0]-0.04,BOX_H[2]-0.04,0.012,0.6); }
+shadowQuad(shadowArr, Xf([0,0,0],0), -1.469, 1.72, 1.22, 0.45, 0.8);
+shadowQuad(swShadowArr, Xf([0,0,0],0), 0.001, SW_H[0], SW_H[2], 0.04, 0.7);
+
+/* ---------------- shaders ---------------- */
+const COMMON = `
+precision highp float;
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453123); }
+float noise(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.0-2.0*f);
+  return mix(mix(hash(i),hash(i+vec2(1,0)),u.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x), u.y); }
+float fbm(vec2 p){ float s=0.0, a=0.5; for(int i=0;i<4;i++){ s+=a*noise(p); p=p*2.03+vec2(1.7,9.2); a*=0.5; } return s; }
+vec3 aces(vec3 x){ return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14),0.0,1.0); }
+vec3 outc(vec3 c){ return pow(aces(c*1.0), vec3(1.0/2.2)); }
+`;
+const VS_MAIN=`
+attribute vec3 aPos, aNor, aCol; attribute float aMat; attribute vec2 aUV;
+uniform mat4 uVP, uModel;
+varying vec3 vW, vN, vC; varying float vM; varying vec2 vUV;
+void main(){ vec4 w=uModel*vec4(aPos,1.0); vW=w.xyz; vN=mat3(uModel)*aNor; vC=aCol; vM=aMat; vUV=aUV; gl_Position=uVP*w; }`;
+const NL=20;
+const FS_MAIN=COMMON+`
+varying vec3 vW, vN, vC; varying float vM; varying vec2 vUV;
+uniform vec3 uCam; uniform float uTime; uniform vec4 uPL[${NL}]; uniform vec3 uPC[${NL}];
+const vec3 FOG=vec3(0.010,0.008,0.007);
+vec3 env(vec3 r){
+  vec3 c = mix(vec3(0.10,0.055,0.025), vec3(0.42,0.34,0.26), smoothstep(-0.25,0.35,r.y));
+  c = mix(c, vec3(0.16,0.15,0.16), smoothstep(0.35,0.9,r.y));
+  c += vec3(3.2,3.0,2.7)*smoothstep(0.90,0.975, dot(r, normalize(vec3(-0.35,0.85,0.4))));
+  c += vec3(1.4,1.25,1.0)*smoothstep(0.80,0.95, dot(r, normalize(vec3(0.7,0.45,0.55))));
+  c += vec3(0.25,0.55,0.9)*0.9*smoothstep(0.65,0.95, dot(r, normalize(vec3(0.4,0.25,-0.88))));
+  return c;
+}
+float worley(vec2 p){ vec2 i=floor(p), f=fract(p); float md=8.0;
+  for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++){ vec2 g=vec2(float(x),float(y));
+    vec2 o=vec2(hash(i+g), hash(i+g+17.31)); vec2 r=g+o-f; md=min(md,dot(r,r)); }
+  return sqrt(md); }
+void main(){
+  vec3 N=normalize(vN); vec3 V=normalize(uCam-vW); float dist=length(uCam-vW);
+  vec3 L=normalize(vec3(-0.45,1.0,0.55)); vec3 H=normalize(L+V);
+  float NoL=max(dot(N,L),0.0), NoV=max(dot(N,V),0.0), NoH=max(dot(N,H),0.0);
+  int m=int(vM+0.5);
+  vec3 col=vec3(0.0);
+  vec3 albedo=vC; float metal=0.0; float shin=40.0; float specK=0.04; float rough=0.5; vec3 emis=vec3(0.0);
+  if(m==0 || m==9){
+    vec3 p=vW; float pl=0.26; float z=(p.z+7.0)/pl; float id=floor(z); float fz=fract(z);
+    if(m==9){ p=vec3(p.y*1.0+p.x*0.3, 0.0, p.z+p.x); }
+    float o=hash(vec2(id,3.1));
+    float n=fbm(vec2(p.x*0.8+o*31.0, p.z*3.0+o*5.0));
+    float ring=fract(p.z*11.0 + n*3.2 + sin(p.x*0.6+o*6.0)*0.7 + o*4.0);
+    float g=smoothstep(0.0,0.55,ring)*(1.0-smoothstep(0.55,1.0,ring));
+    float fine=noise(vec2(p.x*7.0+o*9.0, p.z*260.0));
+    vec3 dk=vec3(0.085,0.040,0.018), lt=vec3(0.30,0.16,0.075);
+    albedo=mix(dk,lt, clamp(g*0.55+fine*0.35+o*0.3,0.0,1.0));
+    if(m==0){ float seam=smoothstep(0.0,0.012,fz)*smoothstep(1.0,0.988,fz); albedo*=mix(0.35,1.0,seam); }
+    else albedo*=0.75;
+    specK=0.05; shin=60.0; rough=0.35;
+  } else if(m==5){
+    float r=length(vW.xz);
+    albedo=vec3(0.05,0.045,0.04)*(0.75+0.25*noise(vW.xz*3.0)) * (0.35+1.3*exp(-r*0.35));
+    specK=0.02; shin=20.0; rough=0.9;
+  } else if(m==1 || m==2){
+    metal=1.0; albedo=vec3(1.0,0.73,0.32); shin=90.0; rough=0.28;
+    if(m==2){
+      vec2 q=vUV*95.0;
+      float w=worley(q);
+      float w2=worley(q*2.1+7.0);
+      float s=smoothstep(0.18,0.62,w)*0.75+smoothstep(0.2,0.6,w2)*0.25;
+      float fade=smoothstep(7.0,2.0,dist);
+      s=mix(0.62, s, fade);
+      albedo=vec3(0.98,0.68,0.27)*mix(0.12,1.05,s);
+      rough=0.6;
+    }
+  } else if(m==6){ metal=1.0; albedo=vec3(0.36,0.37,0.40); shin=60.0; rough=0.45; }
+  else if(m==3 || m==7){ specK=0.05; shin=30.0; rough=0.7; }
+  if(m==4){ emis=vC*2.4; }
+  if(m==8){ float ph=hash(floor(vW.xz*200.0)); float b=step(0.45,fract(uTime*(2.5+ph*4.0)+ph)); emis=vC*(0.5+2.6*b); }
+
+  vec3 R=reflect(-V,N);
+  vec3 E=mix(env(R), env(N)*0.7, rough);
+  if(metal>0.5){
+    vec3 F=albedo+(1.0-albedo)*pow(1.0-NoV,5.0);
+    col = F*E*0.85 + albedo*NoL*0.18 + F*pow(NoH,shin)*2.2*NoL;
+  } else {
+    float F=specK+(1.0-specK)*pow(1.0-NoV,5.0)*(1.0-rough);
+    vec3 amb=mix(vec3(0.05,0.04,0.035), vec3(0.17,0.15,0.13), N.y*0.5+0.5);
+    col = albedo*(NoL*vec3(1.25,1.15,1.0) + amb) + F*E*0.5 + vec3(pow(NoH,shin))*specK*6.0*NoL;
+  }
+  // cable / pulse lights
+  for(int i=0;i<${NL};i++){
+    vec3 d=uPL[i].xyz-vW; float d2=dot(d,d);
+    float att=uPL[i].w/(1.0+d2*90.0)*smoothstep(0.5,0.0,sqrt(d2));
+    float wrap=max(dot(N,normalize(d))*0.6+0.4,0.0);
+    vec3 lc=uPC[i]*att*wrap;
+    if(metal>0.5) col += albedo*lc*1.4; else col += albedo*lc*2.2 + lc*0.04;
+  }
+  col += emis;
+  float fog=smoothstep(4.0,15.0,dist);
+  col=mix(col, FOG, fog);
+  gl_FragColor=vec4(outc(col),1.0);
+}`;
+const VS_CAB=`
+attribute vec3 aPos, aNor, aSEC;
+uniform mat4 uVP; uniform float uInflate;
+varying vec3 vW, vN, vSEC;
+void main(){ float boot=1.0-step(0.045,min(aSEC.x,aSEC.y)); vec3 p=aPos+aNor*uInflate*(1.0-boot*0.6); vW=p; vN=aNor; vSEC=aSEC; gl_Position=uVP*vec4(p,1.0); }`;
+const FS_CAB=COMMON+`
+varying vec3 vW, vN, vSEC;
+uniform vec3 uCam; uniform float uPhase, uRev, uFlow, uShell, uSP;
+void main(){
+  vec3 N=normalize(vN); vec3 V=normalize(uCam-vW);
+  float s=vSEC.x, e=vSEC.y;
+  float boot=1.0-step(0.045,min(s,e));
+  float d1=mod(uPhase - s, uSP);
+  float p1=exp(-d1*11.0)*0.8 + exp(-d1*d1*2600.0)*2.6;
+  float d2=mod(s + uPhase + uSP*0.5, uSP);
+  float p2=(exp(-d2*11.0)*0.8 + exp(-d2*d2*2600.0)*2.6)*uRev;
+  vec3 cA=vec3(0.22,0.80,1.0), cB=vec3(1.0,0.58,0.18);
+  vec3 glow=cA*(0.55 + p1*uFlow*1.8) + cB*p2*uFlow*1.9;
+  if(uShell>0.5){
+    float f=pow(max(dot(N,V),0.0),1.6);
+    vec3 c=glow*f*0.33*(1.0-boot);
+    gl_FragColor=vec4(c,1.0);
+  } else {
+    vec3 col;
+    if(boot>0.5){
+      vec3 L=normalize(vec3(-0.45,1.0,0.55)); vec3 H=normalize(L+V);
+      col=vec3(0.035)*(max(dot(N,L),0.0)+0.25) + vec3(0.5)*pow(max(dot(N,H),0.0),50.0) + cA*0.05;
+    } else {
+      float rim=pow(1.0-max(dot(N,V),0.0),2.0);
+      col=glow*(1.1-rim*0.5) + vec3(1.0)*(p1*uFlow+p2*uFlow*0.7)*0.35;
+    }
+    gl_FragColor=vec4(outc(col),1.0);
+  }
+}`;
+const VS_PT=`
+attribute vec3 aPos; attribute vec4 aCol;
+uniform mat4 uVP; uniform float uPx, uMaxPt;
+varying vec3 vC;
+void main(){ gl_Position=uVP*vec4(aPos,1.0); gl_PointSize=min(aCol.a*uPx/gl_Position.w, uMaxPt); vC=aCol.rgb; }`;
+const FS_PT=`precision mediump float; varying vec3 vC;
+void main(){ vec2 q=gl_PointCoord*2.0-1.0; float r=dot(q,q); if(r>1.0) discard;
+  float a=exp(-r*7.0)*0.9 + exp(-r*40.0)*1.2; gl_FragColor=vec4(vC*a*(1.0-r),1.0); }`;
+const VS_SH=`
+attribute vec3 aPos; attribute vec2 aQ; attribute vec4 aI;
+uniform mat4 uVP, uModel; varying vec2 vQ; varying vec4 vI;
+void main(){ vQ=aQ; vI=aI; gl_Position=uVP*(uModel*vec4(aPos,1.0)); }`;
+const FS_SH=`precision mediump float; varying vec2 vQ; varying vec4 vI; uniform float uAlpha;
+void main(){ vec2 d=abs(vQ)-vI.xy; float sd=length(max(d,0.0))+min(max(d.x,d.y),0.0);
+  float a=(1.0-smoothstep(-vI.z, vI.z*1.2, sd))*vI.w*uAlpha; gl_FragColor=vec4(0.0,0.0,0.0,a); }`;
+const VS_BG=`attribute vec2 aP; varying vec2 vP; void main(){ vP=aP; gl_Position=vec4(aP,0.9999,1.0); }`;
+const FS_BG=COMMON+`varying vec2 vP; uniform float uAsp;
+void main(){ vec2 p=vec2(vP.x*uAsp, vP.y); float g=exp(-dot(p-vec2(0.0,0.35),p-vec2(0.0,0.35))*0.9);
+  vec3 c=vec3(0.010,0.008,0.007)+vec3(0.035,0.026,0.018)*g; gl_FragColor=vec4(outc(c),1.0); }`;
+
+function compile(type, src){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){ const log=gl.getShaderInfoLog(s); throw new Error('Shader compile error: '+log); } return s; }
+function program(vs, fs){
+  const p=gl.createProgram(); gl.attachShader(p,compile(gl.VERTEX_SHADER,vs)); gl.attachShader(p,compile(gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(p); if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error('Program link error: '+gl.getProgramInfoLog(p));
+  const u={}, a={};
+  const nu=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);
+  for(let i=0;i<nu;i++){ const info=gl.getActiveUniform(p,i); const n=info.name.replace(/\[0\]$/,''); u[n]=gl.getUniformLocation(p,n); }
+  const na=gl.getProgramParameter(p,gl.ACTIVE_ATTRIBUTES);
+  for(let i=0;i<na;i++){ const info=gl.getActiveAttrib(p,i); a[info.name]=gl.getAttribLocation(p,info.name); }
+  return {p,u,a};
+}
+let P;
+try{
+  P={ main:program(VS_MAIN,FS_MAIN), cab:program(VS_CAB,FS_CAB), pt:program(VS_PT,FS_PT), sh:program(VS_SH,FS_SH), bg:program(VS_BG,FS_BG) };
+}catch(e){ fail(e.message); return; }
+
+function makeBuf(data, usage){ const b=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.bufferData(gl.ARRAY_BUFFER,data,usage||gl.STATIC_DRAW); return b; }
+function bindLayout(prog, buf, layout){
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  let stride=0; for(const l of layout) stride+=l[1];
+  let off=0;
+  for(const [name,size] of layout){ const loc=prog.a[name]; if(loc!==undefined && loc>=0){ gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,size,gl.FLOAT,false,stride*4,off*4); } off+=size; }
+}
+function disableAll(){ const n=gl.getParameter(gl.MAX_VERTEX_ATTRIBS); for(let i=0;i<n;i++) gl.disableVertexAttribArray(i); }
+const MAIN_LAYOUT=[['aPos',3],['aNor',3],['aCol',3],['aMat',1],['aUV',2]];
+const sceneBuf=makeBuf(new Float32Array(scene.d)), sceneN=scene.d.length/12;
+const swBuf=makeBuf(new Float32Array(swMesh.d)), swN=swMesh.d.length/12;
+const shBuf=makeBuf(new Float32Array(shadowArr)), shN=shadowArr.length/9;
+const swShBuf=makeBuf(new Float32Array(swShadowArr)), swShN=swShadowArr.length/9;
+const bgBuf=makeBuf(new Float32Array([-1,-1,3,-1,-1,3]));
+
+/* ---------------- cables ---------------- */
+const SEG=120, RADS=10, CAB_R=0.0075, BOOT_R=0.0125, BOOT_L=0.045;
+const cabFloats=4*SEG*RADS*6*9;
+const cabData=new Float32Array(cabFloats);
+const cabBuf=makeBuf(cabData, gl.DYNAMIC_DRAW);
+const cabVerts=cabFloats/9;
+function bez(p0,p1,p2,p3,u){ const v=1-u; const a=v*v*v,b=3*v*v*u,c=3*v*u*u,d=u*u*u;
+  return [a*p0[0]+b*p1[0]+c*p2[0]+d*p3[0], 0, a*p0[2]+b*p1[2]+c*p2[2]+d*p3[2]]; }
+function route(p0, n0, p3, n3, k0, k3){
+  const p1=add(p0,scl(n0,k0)), p2=add(p3,scl(n3,k3));
+  const pts=[];
+  for(let j=0;j<=SEG;j++){
+    const u=j/SEG; const q=bez(p0,p1,p2,p3,u);
+    const f0=1-smooth(0,0.22,u), f1=1-smooth(0,0.22,1-u);
+    q[1]=CAB_R + (p0[1]-CAB_R)*f0 + (p3[1]-CAB_R)*f1;
+    pts.push(q);
+  }
+  return pts;
+}
+const ringRoutes=[], swRoutes=[];
+for(let i=0;i<4;i++){
+  const b=boxes[i], nx=boxes[(i+1)%4];
+  ringRoutes.push(route(b.portA, b.inward, nx.portB, nx.inward, 0.34, 0.34));
+  swRoutes.push(route(b.portA, b.inward, b.swPort, b.d, 0.16, 0.16));
+}
+const cables=[0,1,2,3].map(()=>({pts:[], cum:new Float32Array(SEG+1), L:0}));
+for(const c of cables) for(let j=0;j<=SEG;j++) c.pts.push([0,0,0]);
+function buildCables(e){
+  const lift=0.42*Math.sin(Math.PI*e);
+  let o=0;
+  for(let ci=0;ci<4;ci++){
+    const c=cables[ci], A=ringRoutes[ci], B=swRoutes[ci];
+    // arc lifts with a slight per-cable stagger so re-routing reads as a sweep
+    for(let j=0;j<=SEG;j++){
+      const u=j/SEG, p=c.pts[j];
+      p[0]=lerp(A[j][0],B[j][0],e); p[2]=lerp(A[j][2],B[j][2],e);
+      p[1]=lerp(A[j][1],B[j][1],e) + lift*Math.pow(Math.sin(Math.PI*u),0.8)*(0.85+0.15*Math.sin(ci*1.7));
+    }
+    c.cum[0]=0;
+    for(let j=1;j<=SEG;j++){ const a=c.pts[j-1], b=c.pts[j]; c.cum[j]=c.cum[j-1]+Math.hypot(b[0]-a[0],b[1]-a[1],b[2]-a[2]); }
+    c.L=c.cum[SEG];
+    // rotation-minimising frames
+    const T=[], Nn=[], Bn=[];
+    for(let j=0;j<=SEG;j++){ const a=c.pts[Math.max(0,j-1)], b=c.pts[Math.min(SEG,j+1)]; T.push(norm(sub(b,a))); }
+    let n0=cross(T[0],[0,1,0]); if(Math.hypot(...n0)<1e-3) n0=cross(T[0],[1,0,0]); n0=norm(n0);
+    for(let j=0;j<=SEG;j++){ if(j>0){ const t=T[j]; n0=norm(sub(n0, scl(t, dot(n0,t)))); } Nn.push(n0); Bn.push(cross(T[j],n0)); }
+    const ring=[];
+    for(let j=0;j<=SEG;j++){
+      const s=c.cum[j], ee=c.L-s, m=Math.min(s,ee);
+      const r = m<BOOT_L ? BOOT_R*(m<0.004?0.85:1) : CAB_R;
+      const row=[];
+      for(let k=0;k<=RADS;k++){ const ang=k/RADS*Math.PI*2, ca=Math.cos(ang), sa=Math.sin(ang);
+        const n=[Nn[j][0]*ca+Bn[j][0]*sa, Nn[j][1]*ca+Bn[j][1]*sa, Nn[j][2]*ca+Bn[j][2]*sa];
+        row.push([c.pts[j][0]+n[0]*r, c.pts[j][1]+n[1]*r, c.pts[j][2]+n[2]*r, n, s, ee]); }
+      ring.push(row);
+    }
+    const put=(v)=>{ cabData[o++]=v[0]; cabData[o++]=v[1]; cabData[o++]=v[2]; cabData[o++]=v[3][0]; cabData[o++]=v[3][1]; cabData[o++]=v[3][2]; cabData[o++]=v[4]; cabData[o++]=v[5]; cabData[o++]=ci; };
+    for(let j=0;j<SEG;j++) for(let k=0;k<RADS;k++){
+      const a=ring[j][k], b=ring[j+1][k], cc=ring[j+1][k+1], d=ring[j][k+1];
+      put(a); put(b); put(cc); put(a); put(cc); put(d);
+    }
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, cabBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, cabData);
+}
+function sampleCable(c, s){ // world point at arc length s
+  let lo=0, hi=SEG; while(hi-lo>1){ const mid=(lo+hi)>>1; if(c.cum[mid]<s) lo=mid; else hi=mid; }
+  const t=(s-c.cum[lo])/Math.max(1e-6,c.cum[hi]-c.cum[lo]); const a=c.pts[lo], b=c.pts[hi];
+  return [lerp(a[0],b[0],t), lerp(a[1],b[1],t), lerp(a[2],b[2],t)];
+}
+const SP=0.46, SPEED=0.5;
+const MAXPT=96; const ptData=new Float32Array(MAXPT*7); const ptBuf=makeBuf(ptData, gl.DYNAMIC_DRAW);
+const PL=new Float32Array(NL*4), PC=new Float32Array(NL*3);
+
+/* ---------------- camera & input ---------------- */
+const cam={yaw:0.42, pitch:0.52, dist:3.35, vy:0, vp:0, target:[0,0.06,0]};
+const DEF={yaw:0.42,pitch:0.52,dist:3.35};
+let dragging=false, lastX=0, lastY=0, lastMoveT=0;
+const pointers=new Map(); let pinch0=0, dist0=0;
+cv.addEventListener('pointerdown', e=>{
+  cv.focus({preventScroll:true});
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  cv.setPointerCapture(e.pointerId);
+  if(pointers.size===1){ dragging=true; lastX=e.clientX; lastY=e.clientY; cam.vy=cam.vp=0; cv.classList.add('drag'); }
+  else if(pointers.size===2){ const [a,b]=[...pointers.values()]; pinch0=Math.hypot(a.x-b.x,a.y-b.y); dist0=cam.dist; dragging=false; }
+  e.preventDefault();
+});
+cv.addEventListener('pointermove', e=>{
+  if(!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pointers.size===2){ const [a,b]=[...pointers.values()]; const d=Math.hypot(a.x-b.x,a.y-b.y); if(pinch0>0) cam.dist=clamp(dist0*pinch0/d,1.6,8); return; }
+  if(!dragging) return;
+  const r=cv.getBoundingClientRect(); const k=Math.PI*1.4/Math.max(300,r.height);
+  const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
+  cam.yaw-=dx*k; cam.pitch=clamp(cam.pitch+dy*k,0.06,1.42);
+  cam.vy=-dx*k*60; cam.vp=dy*k*60; lastMoveT=performance.now();
+});
+function endPtr(e){ pointers.delete(e.pointerId); if(pointers.size===0){ dragging=false; cv.classList.remove('drag'); if(performance.now()-lastMoveT>80){cam.vy=cam.vp=0;} } else if(pointers.size===1){ const p=[...pointers.values()][0]; lastX=p.x; lastY=p.y; dragging=true; } }
+cv.addEventListener('pointerup', endPtr); cv.addEventListener('pointercancel', endPtr); cv.addEventListener('lostpointercapture', e=>{ if(pointers.has(e.pointerId)) endPtr(e); });
+cv.addEventListener('wheel', e=>{ e.preventDefault(); cam.dist=clamp(cam.dist*Math.exp(e.deltaY*0.0012),1.6,8); }, {passive:false});
+window.addEventListener('keydown', e=>{
+  if(e.target && e.target.id==='topo' && (e.key===' '||e.key==='Enter')) return;
+  const k=e.key;
+  if(k==='ArrowLeft'){ cam.yaw+=0.08; e.preventDefault(); }
+  else if(k==='ArrowRight'){ cam.yaw-=0.08; e.preventDefault(); }
+  else if(k==='ArrowUp'){ cam.pitch=clamp(cam.pitch+0.06,0.06,1.42); e.preventDefault(); }
+  else if(k==='ArrowDown'){ cam.pitch=clamp(cam.pitch-0.06,0.06,1.42); e.preventDefault(); }
+  else if(k==='+'||k==='='){ cam.dist=clamp(cam.dist*0.9,1.6,8); }
+  else if(k==='-'||k==='_'){ cam.dist=clamp(cam.dist/0.9,1.6,8); }
+  else if(k==='t'||k==='T'){ toggle(); }
+  else if(k==='r'||k==='R'){ cam.yaw=DEF.yaw; cam.pitch=DEF.pitch; cam.dist=DEF.dist; cam.vy=cam.vp=0; }
+});
+
+/* ---------------- topology state & UI ---------------- */
+const btn=document.getElementById('topo'), desc=document.getElementById('desc'), lgRev=document.getElementById('lgRev');
+let target=0, prog=0; // 0 ring, 1 switch
+const DESC=[
+  '<em>Ring</em> · 4 peer links · every box cables straight to its two neighbours · traffic circulates one way',
+  '<em>Switch</em> · 4 uplinks to a central switch · any box reaches any other in one switched hop'];
+function toggle(){ setTopo(target?0:1); }
+function setTopo(t){
+  target=t; btn.setAttribute('aria-pressed', t? 'true':'false');
+  btn.setAttribute('aria-label','Toggle cable topology between ring and switch. Current: '+(t?'switch':'ring'));
+  btn.querySelectorAll('.seg').forEach(s=>s.classList.toggle('on', (s.dataset.k==='switch')===!!t));
+  desc.innerHTML=DESC[t]; lgRev.style.opacity = t? '1':'.25';
+  document.documentElement.dataset.topology = t?'switch':'ring';
+}
+btn.addEventListener('click', toggle);
+setTopo(0);
+
+/* labels */
+const labelsEl=document.getElementById('labels');
+function mkLabel(cls, html){ const d=document.createElement('div'); d.className='lbl '+cls; d.innerHTML='<div class="tag">'+html+'</div>'; labelsEl.appendChild(d); return d; }
+const boxLabels=boxes.map((b,i)=>{ const el=mkLabel('box','<b>'+NAMES[i]+'</b><i>GB10 · 128 GB unified</i><br><span class="link"></span>'); return {el, link:el.querySelector('.link'), anchor:[b.pos[0],BOX_Y*2+0.02,b.pos[2]]}; });
+const swLabel={el:mkLabel('sw','<b>QSFP SWITCH</b><i>4 × 200 GbE · non-blocking</i>'), anchor:[0,SW_H[1]*2+0.03,0]};
+const cabLabel={el:mkLabel('cab','<span style="color:var(--cy)">200 GbE QSFP link</span>'), anchor:[0,0,0]};
+function updateLinkText(t){
+  boxLabels.forEach((l,i)=>{
+    l.link.textContent = t ? '↔ uplink · switch port '+(i+1) : '→ '+NAMES[(i+1)%4]+' · ← '+NAMES[(i+3)%4];
+  });
+}
+let linkTextState=-1;
+
+/* ---------------- render ---------------- */
+let W=0,H=0,dpr=1,rs=1,avgDt=1/60,adaptN=0;
+const maxPt=gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1]||64;
+function resize(){
+  dpr=Math.min(window.devicePixelRatio||1,2)*rs;
+  const w=Math.max(1,Math.round(cv.clientWidth*dpr)), h=Math.max(1,Math.round(cv.clientHeight*dpr));
+  if(w!==cv.width||h!==cv.height){ cv.width=w; cv.height=h; }
+  W=w; H=h;
+}
+window.addEventListener('resize', resize); resize();
+
+let lastT=performance.now(), time=0, phase=0, builtE=-1;
+const ease=x=>x<0.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2;
+const backOut=x=>{ const c1=1.5, c3=c1+1; return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2); };
+window.__spark={ get topology(){ return target?'switch':'ring'; }, get progress(){ return prog; }, toggle, setTopo, cam, cables };
+
+function project(VP, p){
+  const x=p[0],y=p[1],z=p[2];
+  const cx=VP[0]*x+VP[4]*y+VP[8]*z+VP[12], cy=VP[1]*x+VP[5]*y+VP[9]*z+VP[13], cw=VP[3]*x+VP[7]*y+VP[11]*z+VP[15];
+  if(cw<=0.01) return null;
+  return [(cx/cw*0.5+0.5)*cv.clientWidth, (1-(cy/cw*0.5+0.5))*cv.clientHeight, cw];
+}
+function placeLabel(l, VP, op){
+  const s=project(VP,l.anchor);
+  if(!s||op<=0.01){ l.el.style.opacity='0'; return; }
+  l.el.style.opacity=String(op);
+  l.el.style.transform='translate('+s[0].toFixed(1)+'px,'+s[1].toFixed(1)+'px)';
+  l.el.style.zIndex=String(1000-Math.round(s[2]*100));
+}
+
+function frame(now){
+  let dt=(now-lastT)/1000; lastT=now;
+  avgDt=avgDt*0.95+Math.min(dt,0.25)*0.05; if(++adaptN>90){ adaptN=0; if(avgDt>0.045&&rs>0.55) rs=Math.max(0.55,rs-0.15); else if(avgDt<0.02&&rs<1) rs=Math.min(1,rs+0.15); } dt=clamp(dt,0,1/20);
+  time+=dt; phase=(phase+dt*SPEED)%(SP*1000);
+  resize();
+  // camera inertia
+  if(!dragging){ cam.yaw+=cam.vy*dt; cam.pitch=clamp(cam.pitch+cam.vp*dt,0.06,1.42); const damp=Math.exp(-dt*4); cam.vy*=damp; cam.vp*=damp; }
+  // topology progress
+  const dir=target>prog?1:(target<prog?-1:0);
+  prog=clamp(prog+dir*dt/1.7,0,1);
+  if(dir!==0 && Math.abs(prog-target)<1e-4) prog=target;
+  const e=ease(prog);
+  const ce=smooth(0.12,0.92,prog); const cE=ease(ce); // cable morph
+  if(Math.abs(cE-builtE)>1e-5){ buildCables(cE); builtE=cE; }
+  const swScale = target? backOut(clamp(prog*1.9,0,1)) : backOut(clamp(prog*1.9-0.9,0,1));
+  const swS=Math.max(0,swScale);
+  const lt = prog>0.5?1:0; if(lt!==linkTextState){ updateLinkText(lt); linkTextState=lt; }
+
+  const dEff=cam.dist*(W/H<1? clamp(1.25/(W/H),1,2.1):1);
+  const eye=[cam.target[0]+dEff*Math.cos(cam.pitch)*Math.sin(cam.yaw), cam.target[1]+dEff*Math.sin(cam.pitch), cam.target[2]+dEff*Math.cos(cam.pitch)*Math.cos(cam.yaw)];
+  const aspect=W/H, fov=(aspect<0.8? 55:38)*Math.PI/180;
+  const VP=M4.mul(M4.persp(fov,aspect,0.03,60), M4.look(eye,cam.target,[0,1,0]));
+
+  // pulses -> sprites + lights
+  const rev=smooth(0.55,1,cE), flow=1-0.75*Math.sin(Math.PI*cE);
+  let np=0, nl=0;
+  const pushPt=(p,c,s)=>{ if(np>=MAXPT) return; const o=np*7; ptData[o]=p[0];ptData[o+1]=p[1];ptData[o+2]=p[2];ptData[o+3]=c[0];ptData[o+4]=c[1];ptData[o+5]=c[2];ptData[o+6]=s; np++; };
+  const pushL=(p,c,w)=>{ if(nl>=NL) return; PL[nl*4]=p[0];PL[nl*4+1]=p[1];PL[nl*4+2]=p[2];PL[nl*4+3]=w; PC[nl*3]=c[0];PC[nl*3+1]=c[1];PC[nl*3+2]=c[2]; nl++; };
+  const CA=[0.35,0.85,1.0], CB=[1.0,0.6,0.2];
+  // ambient cable glow lights (2 per cable)
+  for(const c of cables){ pushL(sampleCable(c,c.L*0.3),CA,0.16); pushL(sampleCable(c,c.L*0.7),CA,0.16); }
+  for(const c of cables){
+    let k=0;
+    for(let s=mod(phase,SP); s<c.L-0.02; s+=SP){ if(s<0.03) continue; const p=sampleCable(c,s); pushPt(p,[CA[0]*flow,CA[1]*flow,CA[2]*flow],0.075); if(k++<1) pushL(p,CA,0.55*flow); }
+    if(rev>0.01){ let k2=0;
+      for(let s=mod(-phase-SP*0.5,SP); s<c.L-0.02; s+=SP){ if(s<0.03) continue; const p=sampleCable(c,s); pushPt(p,[CB[0]*flow*rev,CB[1]*flow*rev,CB[2]*flow*rev],0.075); if(k2++<0 ) pushL(p,CB,0.5*flow*rev); }
+    }
+  }
+  // fill remaining light slots with reverse pulse lights if any, else zero
+  if(rev>0.01){ for(const c of cables){ const s=mod(-phase-SP*0.5,SP); if(s>0.03&&s<c.L) pushL(sampleCable(c,s),CB,0.5*flow*rev); } }
+  for(let i=nl;i<NL;i++){ PL[i*4+3]=0; }
+
+  gl.viewport(0,0,W,H);
+  gl.clearColor(0.01,0.008,0.007,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.disable(gl.CULL_FACE);
+  // background
+  gl.disable(gl.DEPTH_TEST); gl.depthMask(false);
+  gl.useProgram(P.bg.p); disableAll(); bindLayout(P.bg,bgBuf,[['aP',2]]); gl.uniform1f(P.bg.u.uAsp,aspect); gl.drawArrays(gl.TRIANGLES,0,3);
+  gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.depthFunc(gl.LEQUAL);
+  // opaque scene
+  const pm=P.main; gl.useProgram(pm.p); disableAll(); bindLayout(pm,sceneBuf,MAIN_LAYOUT);
+  gl.uniformMatrix4fv(pm.u.uVP,false,VP); gl.uniformMatrix4fv(pm.u.uModel,false,M4.ident());
+  gl.uniform3fv(pm.u.uCam,eye); gl.uniform1f(pm.u.uTime,time%1000); gl.uniform4fv(pm.u.uPL,PL); gl.uniform3fv(pm.u.uPC,PC);
+  gl.drawArrays(gl.TRIANGLES,0,sceneN);
+  if(swS>0.002){
+    bindLayout(pm,swBuf,MAIN_LAYOUT);
+    gl.uniformMatrix4fv(pm.u.uModel,false,M4.trs(0,0,0,SW_YAW,swS));
+    gl.drawArrays(gl.TRIANGLES,0,swN);
+  }
+  // cable cores
+  const pc=P.cab; gl.useProgram(pc.p); disableAll(); bindLayout(pc,cabBuf,[['aPos',3],['aNor',3],['aSEC',3]]);
+  gl.uniformMatrix4fv(pc.u.uVP,false,VP); gl.uniform3fv(pc.u.uCam,eye); gl.uniform1f(pc.u.uPhase,phase);
+  gl.uniform1f(pc.u.uRev,rev); gl.uniform1f(pc.u.uFlow,flow); gl.uniform1f(pc.u.uSP,SP);
+  gl.uniform1f(pc.u.uShell,0); gl.uniform1f(pc.u.uInflate,0); gl.drawArrays(gl.TRIANGLES,0,cabVerts);
+  // blob shadows (multiply-ish alpha)
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+  gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2,-2);
+  const ps=P.sh; gl.useProgram(ps.p); disableAll(); bindLayout(ps,shBuf,[['aPos',3],['aQ',2],['aI',4]]);
+  gl.uniformMatrix4fv(ps.u.uVP,false,VP); gl.uniformMatrix4fv(ps.u.uModel,false,M4.ident()); gl.uniform1f(ps.u.uAlpha,1);
+  gl.drawArrays(gl.TRIANGLES,0,shN);
+  if(swS>0.002){ bindLayout(ps,swShBuf,[['aPos',3],['aQ',2],['aI',4]]); gl.uniformMatrix4fv(ps.u.uModel,false,M4.trs(0,0,0,SW_YAW,swS)); gl.uniform1f(ps.u.uAlpha,clamp(swS,0,1)); gl.drawArrays(gl.TRIANGLES,0,swShN); }
+  gl.disable(gl.POLYGON_OFFSET_FILL);
+  // additive glow shells + pulse sprites
+  gl.blendFunc(gl.ONE,gl.ONE);
+  gl.useProgram(pc.p); disableAll(); bindLayout(pc,cabBuf,[['aPos',3],['aNor',3],['aSEC',3]]);
+  gl.uniform1f(pc.u.uShell,1);
+  gl.uniform1f(pc.u.uInflate,0.012); gl.drawArrays(gl.TRIANGLES,0,cabVerts);
+  gl.uniform1f(pc.u.uInflate,0.03); gl.drawArrays(gl.TRIANGLES,0,cabVerts);
+  if(np>0){
+    gl.bindBuffer(gl.ARRAY_BUFFER,ptBuf); gl.bufferSubData(gl.ARRAY_BUFFER,0,ptData.subarray(0,np*7));
+    const pp=P.pt; gl.useProgram(pp.p); disableAll(); bindLayout(pp,ptBuf,[['aPos',3],['aCol',4]]);
+    gl.uniformMatrix4fv(pp.u.uVP,false,VP); gl.uniform1f(pp.u.uPx, H/(2*Math.tan(fov/2))); gl.uniform1f(pp.u.uMaxPt,maxPt);
+    gl.drawArrays(gl.POINTS,0,np);
+  }
+  gl.disable(gl.BLEND); gl.depthMask(true);
+
+  // labels
+  boxLabels.forEach(l=>placeLabel(l,VP,1));
+  placeLabel(swLabel,VP,clamp((swS-0.6)/0.4,0,1));
+  const c0=cables[lt?1:0]; const mid=sampleCable(c0,c0.L*0.5); cabLabel.anchor=[mid[0],mid[1]+0.02,mid[2]];
+  placeLabel(cabLabel,VP, 1-Math.sin(Math.PI*cE));
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

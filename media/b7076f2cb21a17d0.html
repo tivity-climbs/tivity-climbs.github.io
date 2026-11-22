@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Gummy Pit — grab, squash, fling</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#191024;
+    font-family: ui-rounded, "Trebuchet MS", "Segoe UI", system-ui, sans-serif; }
+  #c { position:fixed; inset:0; width:100%; height:100%; display:block;
+    touch-action:none; cursor:grab; }
+  #c.grabbing { cursor:grabbing; }
+  #hud { position:fixed; top:14px; left:18px; color:#fff; pointer-events:none;
+    text-shadow:0 2px 10px rgba(0,0,0,.5); user-select:none; -webkit-user-select:none; }
+  #hud h1 { margin:0; font-size:20px; letter-spacing:.22em; font-weight:800;
+    color:rgba(255,255,255,.92); }
+  #hud p { margin:3px 0 0 1px; font-size:11.5px; letter-spacing:.14em;
+    color:rgba(255,255,255,.55); text-transform:uppercase; }
+  #reset { position:fixed; top:12px; right:16px; padding:9px 20px; font:inherit;
+    font-size:13px; font-weight:700; letter-spacing:.12em; text-transform:uppercase;
+    color:rgba(255,255,255,.92); background:rgba(255,255,255,.10);
+    border:1px solid rgba(255,255,255,.30); border-radius:999px; cursor:pointer;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    box-shadow:0 4px 18px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.25);
+    transition: transform .12s ease, background .15s ease; touch-action:manipulation; }
+  #reset:hover { background:rgba(255,255,255,.18); }
+  #reset:active { transform:scale(.94); }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Gummy bear pit — drag the bears to grab, squash and fling them"></canvas>
+<div id="hud">
+  <h1>GUMMY PIT</h1>
+  <p>grab &middot; squash &middot; fling</p>
+</div>
+<button id="reset" aria-label="Reset the gummy bears" title="Reset (R)">Reset</button>
+<script>
+'use strict';
+/* ============================================================
+   GUMMY PIT — soft-body gummy bears, single file, no libraries.
+   Physics: position-based dynamics (Verlet) — outline particles,
+   neighbour springs, 2D shape-matching, polygon area preservation,
+   circle-based inter-body collisions, friction against walls.
+   ============================================================ */
+
+const cv  = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1, SCALE = 1, bgGrad = null;
+
+/* ---------------- bear silhouette ----------------
+   The bear is the union of circles; the outline is sampled by
+   casting a ray from the centre at every angle and taking the
+   farthest circle intersection. */
+const CIRCLES = [ // x, y (y up), r — in units of bear height (~0.95)
+  [  0.000,  0.290, 0.160], // head
+  [-0.125,  0.430, 0.085], // ear L
+  [ 0.125,  0.430, 0.085], // ear R
+  [  0.000, -0.030, 0.215], // torso
+  [  0.000, -0.100, 0.190], // belly
+  [-0.255,  0.095, 0.092], // arm L
+  [ 0.255,  0.095, 0.092], // arm R
+  [-0.115, -0.330, 0.105], // leg L
+  [ 0.115, -0.330, 0.105], // leg R
+];
+const N = 34; // outline samples
+function buildRestOutline () {
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2 - Math.PI / 2; // start at top
+    const dx = Math.cos(a), dy = Math.sin(a);
+    let best = 0;
+    for (const [px, py, r] of CIRCLES) {
+      const b = dx * px + dy * py;          // d·(o - p) with o = origin
+      const c = px * px + py * py - r * r;
+      const disc = b * b - c;
+      if (disc > 0) { const t = b + Math.sqrt(disc); if (t > best) best = t; }
+    }
+    pts.push({ x: dx * best, y: -dy * best }); // flip to canvas coords (y down): bear upright
+  }
+  for (let k = 0; k < 1; k++) { // single gentle laplacian pass — more erodes ears/limbs
+    const sm = pts.map((p, i) => {
+      const q = pts[(i + N - 1) % N], w = pts[(i + 1) % N];
+      return { x: p.x * 0.75 + (q.x + w.x) * 0.125, y: p.y * 0.75 + (q.y + w.y) * 0.125 };
+    });
+    for (let i = 0; i < N; i++) { pts[i].x = sm[i].x; pts[i].y = sm[i].y; }
+  }
+  return pts;
+}
+const REST = buildRestOutline();
+/* Recenter the rest shape on its centroid — otherwise shape-matching and
+   collision-circle fitting translate the body a little every substep. */
+const RESTC = (() => { let x = 0, y = 0; for (const p of REST) { x += p.x; y += p.y; } return { x: x / N, y: y / N }; })();
+for (const p of REST) { p.x -= RESTC.x; p.y -= RESTC.y; }
+const REST_AREA = Math.abs(polyArea(REST));
+function polyArea (pts) {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a / 2;
+}
+
+/* ---------------- colours ---------------- */
+const PALETTE = [
+  [255,  71,  87], // red
+  [255, 138,  61], // orange
+  [255, 205,  74], // yellow
+  [ 76, 209, 122], // green
+  [178, 235, 242], // clear-ish
+];
+const mix  = (a, b, t) => [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t];
+const rgba = (c, a) => `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+
+/* ---------------- bear ---------------- */
+class Bear {
+  constructor (idx, x, y, size) {
+    this.idx = idx;
+    this.size = size;
+    this.color = PALETTE[idx % PALETTE.length];
+    this.pts = [];
+    this.c = { x, y }; this.ang = 0;
+    this.reset(x, y);
+  }
+  reset (x, y) {
+    this.pts.length = 0;
+    const s = this.size;
+    for (let i = 0; i < N; i++) {
+      const px = x + REST[i].x * s, py = y + REST[i].y * s;
+      this.pts.push({ x: px, y: py, px: px, py: py });
+    }
+    this.c.x = x; this.c.y = y; this.ang = 0;
+  }
+  centroid () {
+    let x = 0, y = 0;
+    for (const p of this.pts) { x += p.x; y += p.y; }
+    x /= N; y /= N;
+    this.c.x = x; this.c.y = y;
+    return this.c;
+  }
+  fitTransform () { // centroid + best-fit rotation of rest shape (2D Procrustes)
+    const c = this.centroid();
+    let sn = 0, cs = 0;
+    for (let i = 0; i < N; i++) {
+      const rx = REST[i].x * this.size, ry = REST[i].y * this.size;
+      const cx = this.pts[i].x - c.x,       cy = this.pts[i].y - c.y;
+      sn += rx * cy - ry * cx;
+      cs += rx * cx + ry * cy;
+    }
+    this.ang = Math.atan2(sn, cs);
+    return this.ang;
+  }
+  circles () { // world-space collision circles from the fitted transform
+    this.fitTransform();
+    const s = this.size, co = Math.cos(this.ang), si = Math.sin(this.ang);
+    const out = [];
+    for (const [x0, y0, r] of CIRCLES) {
+      const x = x0 - RESTC.x, y = -y0 - RESTC.y; // circles live in the same y-down frame as REST
+      out.push({
+        x: this.c.x + (x * co - y * si) * s,
+        y: this.c.y + (x * si + y * co) * s,
+        r: r * s,
+      });
+    }
+    return out;
+  }
+  aabb () {
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (const p of this.pts) {
+      if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
+      if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y;
+    }
+    return [x0, y0, x1, y1];
+  }
+  localToWorld (lx, ly) { // via fitted transform — used for highlights; input in original y-up shape frame
+    const s = this.size, co = Math.cos(this.ang), si = Math.sin(this.ang);
+    const x = lx - RESTC.x, y = -ly - RESTC.y;
+    return { x: this.c.x + (x * co - y * si) * s, y: this.c.y + (x * si + y * co) * s };
+  }
+}
+
+/* ---------------- world ---------------- */
+let bears = [];
+const SPAWN = []; // deterministic layout
+function layoutSpawns () {
+  SPAWN.length = 0;
+  const cols = W < 640 ? 4 : W < 1100 ? 5 : 6, rows = 3;
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++) {
+      const jx = ((r * 7 + c * 13) % 5) - 2; // fixed pseudo-jitter
+      const jy = ((r * 11 + c * 5) % 3);
+      SPAWN.push([
+        W / 2 + (c - (cols - 1) / 2) * W * 0.155 + jx * W * 0.012,
+        H * 0.68 - r * H * 0.22 - jy * H * 0.02,
+      ]);
+    }
+}
+function buildBears () {
+  layoutSpawns();
+  const base = Math.min(W, H) * 0.15;
+  bears = SPAWN.map(([x, y], i) =>
+    new Bear(i, x, y, base * (0.9 + ((i * 7) % 5) * 0.05)));
+}
+function resetBears () { for (let i = 0; i < bears.length; i++) bears[i].reset(SPAWN[i][0], SPAWN[i][1]); }
+
+function resize () {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  SCALE = Math.max(0.55, Math.min(1.35, Math.min(W, H) / 900));
+  bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#241631');
+  bgGrad.addColorStop(0.55, '#1c1228');
+  bgGrad.addColorStop(1, '#140d1f');
+  if (!bears.length) buildBears();
+  for (const b of bears) for (const p of b.pts) { // keep inside new bounds
+    p.x = Math.max(6, Math.min(W - 6, p.x));
+    p.y = Math.max(6, Math.min(H - 6, p.y));
+  }
+}
+
+/* ---------------- physics ---------------- */
+const STEP = 1 / 120;          // fixed substep
+const ITERS = 6;               // constraint iterations per substep
+const GRAV = 2500;             // px/s^2, scaled
+function integrate (b, dt) {
+  const g = GRAV * SCALE * dt * dt;
+  const damp = 0.996;
+  const maxV = 26 * SCALE;
+  for (const p of b.pts) {
+    let vx = (p.x - p.px) * damp, vy = (p.y - p.py) * damp;
+    const v = Math.hypot(vx, vy);
+    if (v > 15 * SCALE) { const d2 = 0.965; vx *= d2; vy *= d2; } // extra damping on violent motion
+    if (v > maxV) { vx *= maxV / v; vy *= maxV / v; }
+    p.px = p.x; p.py = p.y;
+    p.x += vx; p.y += vy + g;
+  }
+}
+function neighbours (b) {
+  const s = b.size;
+  for (let i = 0; i < N; i++) {
+    const a = b.pts[i], d = b.pts[(i + 1) % N];
+    const rx = REST[i].x * s, ry = REST[i].y * s;
+    const qx = REST[(i + 1) % N].x * s, qy = REST[(i + 1) % N].y * s;
+    const rest = Math.hypot(qx - rx, qy - ry);
+    let dx = d.x - a.x, dy = d.y - a.y;
+    const dist = Math.hypot(dx, dy) || 1e-6;
+    const diff = (dist - rest) / dist * 0.5 * 0.9;
+    dx *= diff; dy *= diff;
+    a.x += dx; a.y += dy; d.x -= dx; d.y -= dy;
+  }
+}
+function shapeMatch (b, k) {
+  const c = b.centroid();
+  let sn = 0, cs = 0;
+  for (let i = 0; i < N; i++) {
+    const rx = REST[i].x * b.size, ry = REST[i].y * b.size;
+    const cx = b.pts[i].x - c.x, cy = b.pts[i].y - c.y;
+    sn += rx * cy - ry * cx; cs += rx * cx + ry * cy;
+  }
+  const ang = Math.atan2(sn, cs), co = Math.cos(ang), si = Math.sin(ang);
+  b.ang = ang;
+  for (let i = 0; i < N; i++) {
+    const tx = c.x + (REST[i].x * co - REST[i].y * si) * b.size;
+    const ty = c.y + (REST[i].x * si + REST[i].y * co) * b.size;
+    b.pts[i].x += (tx - b.pts[i].x) * k;
+    b.pts[i].y += (ty - b.pts[i].y) * k;
+  }
+}
+function areaConstraint (b) { // volume preservation — small capped push each substep
+  const c = b.centroid();
+  const A = polyArea(b.pts);
+  if (Math.abs(A) < 1) return;
+  const ratio = Math.sqrt(REST_AREA * b.size * b.size / Math.abs(A)); // 1 = rest area
+  const f = Math.max(0.985, Math.min(1.015, ratio));
+  if (Math.abs(f - 1) < 1e-4) return;
+  for (const p of b.pts) {
+    p.x = c.x + (p.x - c.x) * (1 + (f - 1) * 0.5);
+    p.y = c.y + (p.y - c.y) * (1 + (f - 1) * 0.5);
+  }
+}
+function walls (b) { // open top — bears drop in from above
+  const m = 4, fr = 0.5, rest = 0.04;
+  for (const p of b.pts) {
+    if (p.y > H - m) {
+      p.y = H - m;
+      p.px = p.x - (p.x - p.px) * fr;      // floor friction
+      p.py = p.y + (p.y - p.py) * rest;    // tiny bounce
+    }
+    if (p.x < m)     { p.x = m;     p.py = p.y - (p.y - p.py) * fr; p.px = p.x + (p.x - p.px) * rest; }
+    if (p.x > W - m) { p.x = W - m; p.py = p.y - (p.y - p.py) * fr; p.px = p.x + (p.x - p.px) * rest; }
+  }
+}
+function bearCollisions () {
+  const n = bears.length;
+  const boxes = new Array(n), circles = new Array(n);
+  for (let i = 0; i < n; i++) { boxes[i] = bears[i].aabb(); circles[i] = bears[i].circles(); }
+  const pr = 2.5 * SCALE;
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    const A = boxes[i], B = boxes[j];
+    if (A[2] < B[0] || B[2] < A[0] || A[3] < B[1] || B[3] < A[1]) continue;
+    collideOne(bears[i], circles[j], 0.45);
+    collideOne(bears[j], circles[i], 0.45);
+  }
+}
+function collideOne (b, circles, strength) {
+  for (const p of b.pts) {
+    for (const c of circles) {
+      const dx = p.x - c.x, dy = p.y - c.y;
+      const rs = c.r + 2.5 * SCALE;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < rs * rs && d2 > 1e-9) {
+        const d = Math.sqrt(d2), push = (rs - d) * strength / d;
+        p.x += dx * push; p.y += dy * push;
+      }
+    }
+  }
+}
+
+/* ---------------- pointer ---------------- */
+const ptr = { x: 0, y: 0, down: false, bear: -1, i: -1, vx: 0, vy: 0, lt: 0 };
+function pick (x, y) { // grab any bear whose body is under the pointer
+  let bestD = 1e9, bi = -1;
+  bears.forEach((b, k) => {
+    const d = Math.hypot(b.c.x - x, b.c.y - y);
+    if (d < b.size * 0.62 && d < bestD) { bestD = d; bi = k; }
+  });
+  if (bi < 0) { // fallback: near-miss grabs the closest outline point within reach
+    let bd = 46 * SCALE + 14;
+    bears.forEach((b, k) => {
+      for (let i = 0; i < N; i++) {
+        const d = Math.hypot(b.pts[i].x - x, b.pts[i].y - y);
+        if (d < bd) { bd = d; bi = k; }
+      }
+    });
+  }
+  if (bi < 0) return { bear: -1, i: -1 };
+  const b = bears[bi];
+  let bj = 0, bd = 1e9;
+  for (let i = 0; i < N; i++) {
+    const d = Math.hypot(b.pts[i].x - x, b.pts[i].y - y);
+    if (d < bd) { bd = d; bj = i; }
+  }
+  return { bear: bi, i: bj };
+}
+function canvasPos (e) {
+  const r = cv.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+cv.addEventListener('pointerdown', e => {
+  const p = canvasPos(e);
+  ptr.x = p.x; ptr.y = p.y; ptr.down = true; ptr.lt = performance.now();
+  ptr.vx = 0; ptr.vy = 0;
+  const hit = pick(p.x, p.y);
+  ptr.bear = hit.bear; ptr.i = hit.i;
+  if (hit.bear < 0) poke(p.x, p.y);
+  cv.classList.add('grabbing');
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+});
+cv.addEventListener('pointermove', e => {
+  const p = canvasPos(e), now = performance.now();
+  const dt = Math.max(1, now - ptr.lt) / 1000;
+  if (ptr.down) {
+    ptr.vx = ptr.vx * 0.5 + ((p.x - ptr.x) / dt) * 0.5;
+    ptr.vy = ptr.vy * 0.5 + ((p.y - ptr.y) / dt) * 0.5;
+  }
+  ptr.x = p.x; ptr.y = p.y; ptr.lt = now;
+});
+function release () {
+  if (ptr.down && ptr.bear >= 0) { // fling: hand pointer velocity to the grabbed point
+    const g = bears[ptr.bear].pts[ptr.i];
+    const cap = 3400 * SCALE;
+    let vx = ptr.vx, vy = ptr.vy;
+    const v = Math.hypot(vx, vy);
+    if (v > cap) { vx *= cap / v; vy *= cap / v; }
+    g.px = g.x - vx * STEP;
+    g.py = g.y - vy * STEP;
+  }
+  ptr.down = false; ptr.bear = -1; ptr.i = -1;
+  cv.classList.remove('grabbing');
+}
+cv.addEventListener('pointerup', release);
+cv.addEventListener('pointercancel', release);
+function poke (x, y) { // nudge nearby bears when grabbing empty space
+  const R = 140 * SCALE;
+  for (const b of bears) for (const p of b.pts) {
+    const dx = p.x - x, dy = p.y - y, d = Math.hypot(dx, dy);
+    if (d < R && d > 1) {
+      const f = (1 - d / R) * 9 * SCALE;
+      p.px -= dx / d * f; p.py -= dy / d * f;
+    }
+  }
+}
+
+/* ---------------- simulation ---------------- */
+function substep () {
+  const dt = STEP;
+  for (const b of bears) integrate(b, dt);
+  for (let it = 0; it < ITERS; it++) {
+    for (const b of bears) neighbours(b);
+    for (const b of bears) shapeMatch(b, 0.04);
+    bearCollisions();
+    for (const b of bears) walls(b);
+    if (ptr.down && ptr.bear >= 0) { // firm grab inside the solver
+      const g = bears[ptr.bear].pts[ptr.i];
+      const k = 0.32;
+      g.x += (ptr.x - g.x) * k; g.y += (ptr.y - g.y) * k;
+    }
+  }
+  for (const b of bears) areaConstraint(b);
+}
+let acc = 0, last = performance.now();
+function frame (t) {
+  requestAnimationFrame(frame);
+  let dt = (t - last) / 1000; last = t;
+  if (dt > 0.1) dt = 0.1;
+  acc += dt;
+  let n = 0;
+  while (acc >= STEP && n < 4) { substep(); acc -= STEP; n++; }
+  if (acc > STEP * 4) acc = 0; // shed backlog, never spiral
+  render();
+}
+
+/* ---------------- rendering ---------------- */
+let shadowSprite = null;
+function makeShadowSprite () {
+  const s = document.createElement('canvas'); s.width = s.height = 128;
+  const g = s.getContext('2d');
+  const rg = g.createRadialGradient(64, 64, 4, 64, 64, 62);
+  rg.addColorStop(0, 'rgba(0,0,0,0.5)');
+  rg.addColorStop(0.6, 'rgba(0,0,0,0.28)');
+  rg.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = rg; g.fillRect(0, 0, 128, 128);
+  return s;
+}
+function tracePath (pts) {
+  const p = new Path2D();
+  const mid = (a, b) => [(a.x + b.x) / 2, (a.y + b.y) / 2];
+  let m = mid(pts[N - 1], pts[0]);
+  p.moveTo(m[0], m[1]);
+  for (let i = 0; i < N; i++) {
+    const q = pts[i], nx = pts[(i + 1) % N], mm = mid(q, nx);
+    p.quadraticCurveTo(q.x, q.y, mm[0], mm[1]);
+  }
+  p.closePath();
+  return p;
+}
+const LIGHT = { x: -0.45, y: -0.89 }; // key light from upper-left
+function drawBear (b) {
+  const c = b.centroid(); b.fitTransform();
+  const S = b.size, col = b.color;
+  const R = S * 0.5;
+  const path = tracePath(b.pts);
+
+  // main translucent body — lighter toward the key light, deeper at the rim
+  const g = ctx.createRadialGradient(
+    c.x + LIGHT.x * R * 0.55, c.y + LIGHT.y * R * 0.55, R * 0.08,
+    c.x, c.y, R * 1.55);
+  g.addColorStop(0,    rgba(mix(col, [255, 255, 255], 0.60), 0.82));
+  g.addColorStop(0.45, rgba(col, 0.62));
+  g.addColorStop(1,    rgba(mix(col, [10, 8, 20], 0.45), 0.62));
+  ctx.fillStyle = g;
+  ctx.fill(path);
+
+  // inner glow pass — glassy candy core
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  const g2 = ctx.createRadialGradient(
+    c.x + LIGHT.x * R * 0.4, c.y + LIGHT.y * R * 0.4, 1,
+    c.x + LIGHT.x * R * 0.4, c.y + LIGHT.y * R * 0.4, R * 1.1);
+  g2.addColorStop(0, rgba(mix(col, [255, 255, 255], 0.85), 0.30));
+  g2.addColorStop(0.5, rgba(col, 0.10));
+  g2.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g2; ctx.fill(path);
+  ctx.restore();
+
+  // rim
+  ctx.strokeStyle = rgba(mix(col, [10, 8, 20], 0.55), 0.55);
+  ctx.lineWidth = Math.max(1, S * 0.018);
+  ctx.stroke(path);
+
+  // speculars (fixed spots in bear-local space)
+  const spec = [[-0.05, 0.33, 0.085, 0.055, -0.5, 0.65], [0.10, -0.16, 0.05, 0.035, 0.4, 0.4]];
+  ctx.fillStyle = 'rgba(255,255,255,0.65)';
+  for (const [lx, ly, rw, rh, rot, a] of spec) {
+    const w = b.localToWorld(lx, ly);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.translate(w.x, w.y); ctx.rotate(b.ang + rot);
+    ctx.beginPath(); ctx.ellipse(0, 0, rw * S, rh * S, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+  // sugar sparkles
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  for (const [lx, ly] of [[-0.14, 0.24], [0.16, 0.05], [-0.06, -0.28], [0.05, 0.18]]) {
+    const w = b.localToWorld(lx, ly);
+    ctx.beginPath(); ctx.arc(w.x, w.y, Math.max(1, S * 0.012), 0, Math.PI * 2); ctx.fill();
+  }
+}
+function drawShadow (b) {
+  let low = null;
+  for (const p of b.pts) if (!low || p.y > low.y) low = p;
+  const gap = H - low.y;
+  if (gap > H * 0.5) return;
+  const a = 0.42 * Math.max(0, 1 - gap / (H * 0.5));
+  const w = b.size * 1.15, h = b.size * 0.16;
+  ctx.globalAlpha = a;
+  ctx.drawImage(shadowSprite, low.x - w / 2, H - h * 0.9, w, h);
+  ctx.globalAlpha = 1;
+}
+function render () {
+  ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
+  // faint key-light pool
+  const pool = ctx.createRadialGradient(W * 0.3, H * 0.1, 0, W * 0.3, H * 0.1, Math.max(W, H) * 0.8);
+  pool.addColorStop(0, 'rgba(255,240,220,0.06)'); pool.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = pool; ctx.fillRect(0, 0, W, H);
+
+  const order = [...bears].sort((a, b) => a.c.y - b.c.y);
+  for (const b of order) drawShadow(b);
+  for (const b of order) drawBear(b);
+}
+
+/* ---------------- boot ---------------- */
+const resetBtn = document.getElementById('reset');
+resetBtn.addEventListener('click', () => { resetBears(); resetBtn.blur(); });
+window.addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') resetBears(); });
+window.addEventListener('resize', resize);
+
+window.__gummy = { // test/inspection hook
+  bears: () => bears.map(b => ({ x: +b.c.x.toFixed(1), y: +b.c.y.toFixed(1), size: b.size })),
+  rest: () => REST.map(p => ({ x: p.x, y: p.y })),
+  reset: resetBears,
+  speeds: () => Math.max(...bears.flatMap(b => b.pts.map(p => Math.hypot(p.x - p.px, p.y - p.y)))).toFixed(2),
+  areas: () => bears.map(b => +(Math.abs(polyArea(b.pts)) / (REST_AREA * b.size * b.size)).toFixed(3)),
+  grab: () => ({ down: ptr.down, bear: ptr.bear, i: ptr.i, x: ptr.x, y: ptr.y, vx: ptr.vx | 0, vy: ptr.vy | 0 }),
+  boxes: () => bears.map(b => { const [x0, y0, x1, y1] = b.aabb(); return { w: +(x1 - x0).toFixed(1), h: +(y1 - y0).toFixed(1) }; }),
+  count: n => { bears.length = Math.min(bears.length, n); },
+};
+shadowSprite = makeShadowSprite();
+resize();
+requestAnimationFrame(t => { last = t; frame(t); });
+</script>
+</body>
+</html>

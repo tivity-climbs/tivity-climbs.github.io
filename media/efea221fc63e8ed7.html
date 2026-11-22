@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Water Balloons — grab, throw, splash, pop</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#0f1d2b;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:grab}
+  canvas.grabbing{cursor:grabbing}
+  #ui{position:fixed;top:12px;left:12px;display:flex;gap:8px;flex-wrap:wrap;z-index:2;pointer-events:none}
+  #ui button{pointer-events:auto;font:600 15px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#0d2233;background:rgba(255,255,255,.88);border:0;border-radius:999px;padding:11px 16px;box-shadow:0 3px 10px rgba(0,0,0,.18);cursor:pointer;touch-action:manipulation;transition:transform .12s,background .2s}
+  #ui button:hover{background:#fff}
+  #ui button:active{transform:scale(.94)}
+  #ui button:focus-visible{outline:3px solid #ffcf3f;outline-offset:2px}
+  #reset{background:#ffcf3f!important}
+  #reset.pulse{animation:pulse 1s ease-in-out infinite}
+  @keyframes pulse{50%{transform:scale(1.1);box-shadow:0 0 0 8px rgba(255,207,63,.35)}}
+  #score{position:fixed;top:16px;right:16px;z-index:2;color:#fff;font:700 15px/1 system-ui,sans-serif;text-shadow:0 1px 3px rgba(0,0,0,.4);pointer-events:none;text-align:right}
+  #hint{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:2;color:#fff;font:500 15px/1.35 system-ui,sans-serif;background:rgba(10,25,40,.55);padding:10px 16px;border-radius:12px;text-align:center;pointer-events:none;transition:opacity 1.2s;max-width:90vw}
+  #hint.hide{opacity:0}
+  @media (max-width:520px){#ui button{font-size:14px;padding:10px 13px}#score{top:62px;left:14px;right:auto}}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Water balloon playground. Drag balloons to grab and throw them." role="img"></canvas>
+<div id="ui">
+  <button id="reset" type="button" aria-label="Reset balloons">↺ Reset</button>
+  <button id="add" type="button" aria-label="Add a balloon">＋ Balloon</button>
+  <button id="sound" type="button" aria-label="Toggle sound" aria-pressed="true">🔊 Sound</button>
+</div>
+<div id="score" aria-live="polite">Popped: 0</div>
+<div id="hint">Grab a balloon and fling it · hard hits pop it · double‑tap to pop · R = reset</div>
+<script>
+(() => {
+'use strict';
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const hint = document.getElementById('hint');
+const scoreEl = document.getElementById('score');
+const resetBtn = document.getElementById('reset');
+
+// ---------- sizing ----------
+let W = 0, H = 0, DPR = 1, floorY = 0, G = 2000, R0 = 50, vPop = 2000;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  floorY = H - Math.max(40, Math.min(110, H * 0.12));
+  G = Math.max(1300, Math.min(2800, H * 2.4));
+  R0 = Math.max(30, Math.min(72, Math.min(W, H) * 0.075));
+  vPop = Math.max(1600, Math.sqrt(2 * G * floorY) * 1.4);
+  for (const b of balloons) for (const p of b.pts) clampPoint(p);
+}
+
+// ---------- seeded RNG ----------
+let seed = 1;
+function rnd() { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }
+const fxr = Math.random; // particle randomness (visual only)
+
+// ---------- state ----------
+const N = 28;                 // points per balloon
+const DT = 1 / 120;           // fixed sim step
+const ITER = 5;
+const COLORS = [
+  ['#ff4d6d', '#ff99ac', '#a3122f'], ['#ffb703', '#ffe08a', '#b86e00'],
+  ['#3a86ff', '#9cc3ff', '#0f3f99'], ['#2ec4b6', '#9ff0e7', '#0b6e66'],
+  ['#9b5de5', '#d3b5ff', '#4b1f8a'], ['#f15bb5', '#ffb0e0', '#8f1663'],
+  ['#80ed99', '#cfffd8', '#2a8a45'], ['#ff7b00', '#ffc285', '#9c3d00']
+];
+let balloons = [], drops = [], puddles = [], shreds = [], rings = [];
+let pops = 0, nextId = 1, simTime = 0, colorIdx = 0;
+const grabs = new Map(); const popLog = []; // pointerId -> grab
+
+function makeBalloon(cx, cy, r, ci, vx = 0, vy = 0) {
+  const pts = [], rest = [];
+  const rot = (rnd() - 0.5) * 0.6;
+  for (let i = 0; i < N; i++) {
+    const a = -Math.PI / 2 + (i / N) * Math.PI * 2;
+    // slight teardrop: narrower near the knot (i = 0 at top)
+    const k = 1 + 0.09 * Math.cos(a + Math.PI / 2) * -1 + 0.04 * Math.cos(2 * (a + Math.PI / 2));
+    const ox = Math.cos(a) * r * k, oy = Math.sin(a) * r * k * 1.04;
+    const rx = ox * Math.cos(rot) - oy * Math.sin(rot), ry = ox * Math.sin(rot) + oy * Math.cos(rot);
+    rest.push(rx, ry);
+  }
+  // centre the rest shape on its centroid so shape matching applies no net force
+  let mx = 0, my = 0;
+  for (let i = 0; i < N; i++) { mx += rest[2 * i]; my += rest[2 * i + 1]; }
+  mx /= N; my /= N;
+  for (let i = 0; i < N; i++) {
+    rest[2 * i] -= mx; rest[2 * i + 1] -= my;
+    const rx = rest[2 * i], ry = rest[2 * i + 1];
+    pts.push({ x: cx + rx, y: cy + ry, px: cx + rx - vx * DT, py: cy + ry - vy * DT, gw: 0 });
+  }
+  const b = { id: nextId++, pts, rest, r, col: COLORS[ci % COLORS.length], A0: 0, L0: [], P0: 0,
+    damage: 0, cool: 0, contact: false, alive: true, minx: 0, maxx: 0, miny: 0, maxy: 0, cx, cy, vx: 0, vy: 0, wob: 0, lastTap: -1 };
+  b.A0 = area(b);
+  for (let i = 0; i < N; i++) { const p = pts[i], q = pts[(i + 1) % N]; const l = Math.hypot(q.x - p.x, q.y - p.y); b.L0.push(l); b.P0 += l; }
+  return b;
+}
+function area(b) {
+  let s = 0; const p = b.pts;
+  for (let i = 0, j = N - 1; i < N; j = i++) s += p[j].x * p[i].y - p[i].x * p[j].y;
+  return s * 0.5;
+}
+
+function reset() {
+  seed = 20240607;
+  balloons = []; drops = []; puddles = []; shreds = []; rings = []; grabs.clear();
+  pops = 0; colorIdx = 0; updateScore();
+  const n = Math.max(3, Math.min(7, Math.floor(W / (R0 * 3.1))));
+  const span = W - R0 * 3.8;
+  for (let i = 0; i < n; i++) {
+    const x = R0 * 1.9 + span * (n === 1 ? 0.5 : i / (n - 1));
+    const y = floorY - R0 * 1.3 - rnd() * Math.min(floorY * 0.45, 260);
+    const r = R0 * (0.85 + rnd() * 0.3);
+    balloons.push(makeBalloon(x, y, r, colorIdx++));
+  }
+  resetBtn.classList.remove('pulse');
+}
+function addBalloon(x, y) {
+  if (balloons.length >= 14) return;
+  if (x === undefined) {
+    y = Math.max(R0 * 1.5, floorY * 0.2);
+    let best = -1;
+    for (let k = 0; k < 12; k++) {
+      const cx = R0 * 1.5 + fxr() * (W - R0 * 3);
+      let clear = 1e9;
+      for (const b of balloons) clear = Math.min(clear, Math.hypot(b.cx - cx, b.cy - y) - b.r);
+      if (clear > best) { best = clear; x = cx; }
+    }
+  }
+  // never spawn inside another balloon: lift above anything in the way
+  for (let k = 0; k < 6; k++) {
+    let moved = false;
+    for (const b of balloons) if (Math.hypot(b.cx - x, b.cy - y) < b.r + R0 * 1.25) { y = Math.max(R0 * 1.2, b.cy - b.r - R0 * 1.3); if (y <= R0 * 1.2) x = (x + W * 0.37) % (W - R0 * 2) + R0; moved = true; }
+    if (!moved) break;
+  }
+  balloons.push(makeBalloon(x, y, R0 * (0.85 + fxr() * 0.3), colorIdx++, (fxr() - 0.5) * 300, 0));
+  resetBtn.classList.remove('pulse');
+}
+function updateScore() { scoreEl.textContent = 'Popped: ' + pops; }
+
+// ---------- physics ----------
+function clampPoint(p) {
+  const m = 2;
+  if (p.y > floorY - m) p.y = floorY - m;
+  if (p.y < m) p.y = m;
+  if (p.x < m) p.x = m;
+  if (p.x > W - m) p.x = W - m;
+}
+
+function step(subFrac) {
+  simTime += DT;
+  const g2 = G * DT * DT;
+  const maxD = 70;
+  // integrate
+  for (const b of balloons) {
+    b.impact = 0; b.impN = 0; b.impX = 0; b.impY = 0; b.impWall = 0;
+    if (b.cool > 0) b.cool -= DT;
+    for (const p of b.pts) {
+      let vx = (p.x - p.px) * 0.9985, vy = (p.y - p.py) * 0.9985;
+      const s = Math.hypot(vx, vy); if (s > maxD) { vx *= maxD / s; vy *= maxD / s; }
+      p.px = p.x; p.py = p.y;
+      p.x += vx; p.y += vy + g2;
+    }
+  }
+  // move grab targets smoothly toward the pointer
+  for (const gr of grabs.values()) {
+    gr.gx += (gr.tx - gr.gx) * subFrac; gr.gy += (gr.ty - gr.gy) * subFrac;
+  }
+  for (let it = 0; it < ITER; it++) {
+    for (const b of balloons) solveBalloon(b);
+    for (const gr of grabs.values()) solveGrab(gr);
+    collideBalloons(it === 0);
+    for (const b of balloons) boundary(b, it === 0);
+  }
+  // events: impacts, stretch
+  for (const b of balloons) {
+    bounds(b);
+    if (b.impact > 0) handleImpact(b);
+    let per = 0; const p = b.pts;
+    for (let i = 0; i < N; i++) { const q = p[(i + 1) % N]; per += Math.hypot(q.x - p[i].x, q.y - p[i].y); }
+    b.stretch = per / b.P0;
+    if (b.stretch > 2.35) popBalloon(b, 'stretch');
+  }
+  balloons = balloons.filter(b => b.alive);
+}
+
+function solveBalloon(b) {
+  const p = b.pts;
+  // edge springs (rubber, slightly soft)
+  for (let i = 0; i < N; i++) {
+    const a = p[i], c = p[(i + 1) % N];
+    const dx = c.x - a.x, dy = c.y - a.y, d = Math.hypot(dx, dy) || 1e-6;
+    const diff = (d - b.L0[i]) / d * 0.5 * (d > b.L0[i] ? 0.55 : 0.9);
+    a.x += dx * diff; a.y += dy * diff; c.x -= dx * diff; c.y -= dy * diff;
+  }
+  // pressure / area preservation (water is incompressible)
+  let A = 0;
+  for (let i = 0, j = N - 1; i < N; j = i++) A += p[j].x * p[i].y - p[i].x * p[j].y;
+  A *= 0.5;
+  const C = A - b.A0;
+  let den = 0;
+  const gx = b._gx || (b._gx = new Float32Array(N)), gy = b._gy || (b._gy = new Float32Array(N));
+  for (let i = 0; i < N; i++) {
+    const nx = p[(i + 1) % N], pv = p[(i + N - 1) % N];
+    const tx = nx.x - pv.x, ty = nx.y - pv.y;
+    gx[i] = 0.5 * ty; gy[i] = -0.5 * tx; den += gx[i] * gx[i] + gy[i] * gy[i];
+  }
+  if (den > 1e-6) {
+    const lam = -C / den * 0.9;
+    for (let i = 0; i < N; i++) { p[i].x += gx[i] * lam; p[i].y += gy[i] * lam; }
+  }
+  // weak shape matching keeps it from folding while allowing wobble
+  let cx = 0, cy = 0;
+  for (const q of p) { cx += q.x; cy += q.y; }
+  cx /= N; cy /= N;
+  let sd = 0, sc = 0;
+  for (let i = 0; i < N; i++) {
+    const rx = b.rest[2 * i], ry = b.rest[2 * i + 1], qx = p[i].x - cx, qy = p[i].y - cy;
+    sd += rx * qx + ry * qy; sc += rx * qy - ry * qx;
+  }
+  const ang = Math.atan2(sc, sd), ca = Math.cos(ang), sa = Math.sin(ang);
+  const k = 0.028;
+  for (let i = 0; i < N; i++) {
+    const rx = b.rest[2 * i], ry = b.rest[2 * i + 1];
+    const tx = cx + rx * ca - ry * sa, ty = cy + rx * sa + ry * ca;
+    p[i].x += (tx - p[i].x) * k; p[i].y += (ty - p[i].y) * k;
+  }
+  b.cx = cx; b.cy = cy; b.ang = ang;
+}
+
+function solveGrab(gr) {
+  const b = gr.b; if (!b.alive) return;
+  // rotate stored offsets with the balloon so it can spin naturally
+  const ca = Math.cos(b.ang - gr.ang0), sa = Math.sin(b.ang - gr.ang0);
+  for (let i = 0; i < N; i++) {
+    const w = gr.w[i]; if (w < 0.02) continue;
+    const ox = gr.ox[i], oy = gr.oy[i];
+    const tx = gr.gx + ox * ca - oy * sa, ty = gr.gy + ox * sa + oy * ca;
+    const p = b.pts[i];
+    p.x += (tx - p.x) * w * 0.45; p.y += (ty - p.y) * w * 0.45;
+  }
+}
+
+function boundary(b, first) {
+  const m = 2;
+  for (const p of b.pts) {
+    let hit = 0, vn = 0;
+    if (p.y > floorY - m) { vn = p.y - p.py; p.y = floorY - m; hit = 1; if (first) { const vx = p.x - p.px; p.px = p.x - vx * 0.9; } }
+    else if (p.y < m) { vn = p.py - p.y; p.y = m; hit = 2; if (first) { const vx = p.x - p.px; p.px = p.x - vx * 0.97; } }
+    if (p.x < m) { vn = Math.max(vn, p.px - p.x); p.x = m; hit = 3; if (first) { const vy = p.y - p.py; p.py = p.y - vy * 0.97; } }
+    else if (p.x > W - m) { vn = Math.max(vn, p.x - p.px); p.x = W - m; hit = 4; if (first) { const vy = p.y - p.py; p.py = p.y - vy * 0.97; } }
+    if (hit && first && vn > 0) {
+      // impact speed = body (centroid) velocity into the surface; robust against single-point jitter
+      const v = hit === 1 ? b.vy : hit === 2 ? -b.vy : hit === 3 ? -b.vx : b.vx;
+      if (v > b.impact) { b.impact = v; b.impX = p.x; b.impY = p.y; b.impWall = hit; }
+    }
+  }
+}
+
+function bounds(b) {
+  let a = 1e9, c = -1e9, d = 1e9, e = -1e9, sx = 0, sy = 0, vx = 0, vy = 0;
+  for (const p of b.pts) {
+    if (p.x < a) a = p.x; if (p.x > c) c = p.x; if (p.y < d) d = p.y; if (p.y > e) e = p.y;
+    sx += p.x; sy += p.y; vx += p.x - p.px; vy += p.y - p.py;
+  }
+  b.minx = a; b.maxx = c; b.miny = d; b.maxy = e; b.cx = sx / N; b.cy = sy / N; b.vx = vx / N / DT; b.vy = vy / N / DT;
+}
+
+function pointInPoly(x, y, p) {
+  let ins = false;
+  for (let i = 0, j = N - 1; i < N; j = i++) {
+    const a = p[i], c = p[j];
+    if ((a.y > y) !== (c.y > y) && x < (c.x - a.x) * (y - a.y) / (c.y - a.y) + a.x) ins = !ins;
+  }
+  return ins;
+}
+
+const touching = new Set();
+function collideBalloons(first) {
+  for (const b of balloons) bounds(b);
+  const n = balloons.length;
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    const A = balloons[i], B = balloons[j];
+    if (A.maxx < B.minx || B.maxx < A.minx || A.maxy < B.miny || B.maxy < A.miny) continue;
+    const h1 = pushOut(A, B), h2 = pushOut(B, A);
+    const key = A.id * 100000 + B.id;
+    if (!first) continue;
+    if (h1 + h2 > 0) {
+      if (!touching.has(key)) {
+        touching.add(key);
+        const rvx = A.vx - B.vx, rvy = A.vy - B.vy;
+        const dx = B.cx - A.cx, dy = B.cy - A.cy, dl = Math.hypot(dx, dy) || 1;
+        const rel = Math.abs((rvx * dx + rvy * dy) / dl);
+        if (rel > 450) balloonClash(A, B, rel, (A.cx + B.cx) / 2, (A.cy + B.cy) / 2);
+      }
+    } else touching.delete(key);
+  }
+}
+function pushOut(A, B) {
+  // push points of A that are inside polygon B out across the nearest edge of B
+  // that faces A (prevents deep points being shoved out through the far side)
+  let hits = 0; const bp = B.pts;
+  const ax = A.cx - B.cx, ay = A.cy - B.cy;
+  for (const p of A.pts) {
+    if (p.x < B.minx || p.x > B.maxx || p.y < B.miny || p.y > B.maxy) continue;
+    if (!pointInPoly(p.x, p.y, bp)) continue;
+    let best = 1e9, bi = -1, bt = 0, bx = 0, by = 0;
+    for (let pass = 0; pass < 2 && bi < 0; pass++) {
+      for (let k = 0; k < N; k++) {
+        const a = bp[k], c = bp[(k + 1) % N];
+        const ex = c.x - a.x, ey = c.y - a.y;
+        // outward normal for CCW-on-screen polygon (y down): (ey, -ex)
+        if (pass === 0 && (ey * ax - ex * ay) <= 0) continue;
+        const l2 = ex * ex + ey * ey || 1e-6;
+        let t = ((p.x - a.x) * ex + (p.y - a.y) * ey) / l2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const qx = a.x + ex * t, qy = a.y + ey * t, d = (p.x - qx) ** 2 + (p.y - qy) ** 2;
+        if (d < best) { best = d; bi = k; bt = t; bx = qx; by = qy; }
+      }
+    }
+    let dx = bx - p.x, dy = by - p.y;
+    const dl = Math.hypot(dx, dy), cap = 8;
+    if (dl > cap) { dx *= cap / dl; dy *= cap / dl; }
+    p.x += dx * 0.5; p.y += dy * 0.5;
+    const a = bp[bi], c = bp[(bi + 1) % N];
+    a.x -= dx * 0.5 * (1 - bt); a.y -= dy * 0.5 * (1 - bt);
+    c.x -= dx * 0.5 * bt; c.y -= dy * 0.5 * bt;
+    // inelastic contact: bleed off part of the relative velocity (rubber friction + damping)
+    const evx = (a.x - a.px) * (1 - bt) + (c.x - c.px) * bt, evy = (a.y - a.py) * (1 - bt) + (c.y - c.py) * bt;
+    const fx = (p.x - p.px) - evx, fy = (p.y - p.py) - evy;
+    p.px += fx * 0.06; p.py += fy * 0.06;
+    a.px -= fx * 0.03 * (1 - bt); a.py -= fy * 0.03 * (1 - bt);
+    c.px -= fx * 0.03 * bt; c.py -= fy * 0.03 * bt;
+    hits++;
+  }
+  return hits;
+}
+
+// ---------- events ----------
+function handleImpact(b) {
+  const v = b.impact;
+  if (v < 260) return;
+  const grabbed = isGrabbed(b);
+  if (v >= vPop) { popBalloon(b, 'impact'); return; }
+  if (b.cool > 0) return;
+  b.cool = 0.12;
+  const f = v / vPop;
+  if (f > 0.75 && !grabbed) b.damage += (f - 0.7) * 1.6;
+  if (b.damage >= 1) { popBalloon(b, 'impact'); return; }
+  // wet spray on impact
+  const nx = b.impWall === 1 ? 0 : b.impWall === 2 ? 0 : b.impWall === 3 ? 1 : -1;
+  const ny = b.impWall === 1 ? -1 : b.impWall === 2 ? 1 : 0;
+  spray(b.impX, b.impY, nx, ny, Math.floor(f * f * 26), v * 0.35);
+  sndThud(Math.min(1, f * 1.4));
+  b.wob = Math.min(1, b.wob + f);
+}
+function balloonClash(A, B, rel, x, y) {
+  const f = rel / vPop;
+  spray(x, y, 0, -1, Math.floor(f * 18) + 2, rel * 0.3);
+  sndThud(Math.min(1, f * 1.2) * 0.8);
+  if (rel > vPop * 1.1) { popBalloon(Math.hypot(A.vx, A.vy) > Math.hypot(B.vx, B.vy) ? B : A, 'clash'); }
+  else if (f > 0.75) { A.damage += (f - 0.7) * 1.2; B.damage += (f - 0.7) * 1.2; }
+}
+function isGrabbed(b) { for (const g of grabs.values()) if (g.b === b) return true; return false; }
+
+function spray(x, y, nx, ny, count, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.atan2(ny, nx) + (fxr() - 0.5) * 2.4;
+    const s = speed * (0.25 + fxr() * 0.75);
+    addDrop(x, y, Math.cos(a) * s, Math.sin(a) * s, 1.2 + fxr() * 2.4);
+  }
+}
+function addDrop(x, y, vx, vy, r) {
+  if (drops.length > 1400) drops.shift();
+  drops.push({ x, y, vx, vy, r, life: 1 });
+}
+
+function popBalloon(b, why) {
+  if (!b.alive) return;
+  b.alive = false; popLog.push(why);
+  for (const [id, g] of grabs) if (g.b === b) grabs.delete(id);
+  pops++; updateScore();
+  bounds(b);
+  const p = b.pts;
+  const Aabs = Math.abs(area(b));
+  // water keeps the balloon's momentum, bursts outward
+  const burst = 250 + Math.min(900, Math.hypot(b.vx, b.vy) * 0.25);
+  for (let i = 0; i < N; i++) {
+    const q = p[i]; const vx = (q.x - q.px) / DT, vy = (q.y - q.py) / DT;
+    const dx = q.x - b.cx, dy = q.y - b.cy, dl = Math.hypot(dx, dy) || 1;
+    for (let k = 0; k < 3; k++) {
+      const s = burst * (0.4 + fxr() * 0.9);
+      addDrop(q.x, q.y, vx * 0.6 + dx / dl * s + (fxr() - 0.5) * 120, vy * 0.6 + dy / dl * s + (fxr() - 0.5) * 120, 2 + fxr() * 3.5);
+    }
+  }
+  const nIn = Math.min(220, Math.floor(Aabs / 55));
+  for (let k = 0; k < nIn; k++) {
+    let x, y, tries = 0;
+    do { x = b.minx + fxr() * (b.maxx - b.minx); y = b.miny + fxr() * (b.maxy - b.miny); tries++; } while (!pointInPoly(x, y, p) && tries < 8);
+    const dx = x - b.cx, dy = y - b.cy, dl = Math.hypot(dx, dy) || 1;
+    const s = burst * fxr() * 0.8 * (dl / b.r);
+    addDrop(x, y, b.vx * 0.7 + dx / dl * s, b.vy * 0.7 + dy / dl * s - fxr() * 80, 2.5 + fxr() * 4.5);
+  }
+  // rubber shreds
+  const ns = 5 + Math.floor(fxr() * 3);
+  for (let k = 0; k < ns; k++) {
+    const i0 = Math.floor(k * N / ns), len = 3 + Math.floor(fxr() * 2);
+    const pts = [];
+    for (let m = 0; m <= len; m++) { const q = p[(i0 + m) % N]; pts.push([q.x - b.cx, q.y - b.cy]); }
+    let mx = 0, my = 0; for (const q of pts) { mx += q[0]; my += q[1]; } mx /= pts.length; my /= pts.length;
+    for (const q of pts) { q[0] = (q[0] - mx) * 0.45; q[1] = (q[1] - my) * 0.45; }
+    const dl = Math.hypot(mx, my) || 1, s = 300 + fxr() * 500;
+    shreds.push({ x: b.cx + mx, y: b.cy + my, vx: b.vx * 0.3 + mx / dl * s, vy: b.vy * 0.3 + my / dl * s - 200, a: 0, va: (fxr() - 0.5) * 20, pts, col: b.col, life: 1, rest: false, knot: k === 0 });
+  }
+  rings.push({ x: b.cx, y: b.cy, r: b.r * 0.8, life: 1, col: b.col[1] });
+  sndPop(); sndSplash(1);
+  if (balloons.every(o => !o.alive)) resetBtn.classList.add('pulse');
+}
+
+// ---------- particles ----------
+function updateParticles(dt) {
+  const g = G * dt;
+  for (let i = drops.length - 1; i >= 0; i--) {
+    const d = drops[i];
+    d.vy += g; d.vx *= 0.995;
+    d.x += d.vx * dt; d.y += d.vy * dt;
+    if (d.x < d.r) { d.x = d.r; d.vx = Math.abs(d.vx) * 0.3; }
+    if (d.x > W - d.r) { d.x = W - d.r; d.vx = -Math.abs(d.vx) * 0.3; }
+    if (d.y < 0 && d.vy < 0) { d.vy *= -0.2; }
+    // drops colliding with live balloons slide off
+    if (d.y >= floorY) {
+      addPuddle(d.x, d.r);
+      if (d.r > 3 && Math.abs(d.vy) > 500 && drops.length < 1300) {
+        for (let k = 0; k < 2; k++) addDrop(d.x, floorY - 1, d.vx * 0.3 + (fxr() - 0.5) * 220, -Math.abs(d.vy) * (0.15 + fxr() * 0.2), d.r * 0.4);
+      }
+      drops[i] = drops[drops.length - 1]; drops.pop();
+    }
+  }
+  for (let i = puddles.length - 1; i >= 0; i--) {
+    const p = puddles[i];
+    p.w += (p.tw - p.w) * Math.min(1, dt * 6);
+    p.tw *= 1 - dt * 0.035; p.a -= dt * 0.03;
+    if (p.a <= 0 || p.tw < 3) { puddles.splice(i, 1); }
+  }
+  for (let i = shreds.length - 1; i >= 0; i--) {
+    const s = shreds[i];
+    if (!s.rest) {
+      s.vy += g; s.x += s.vx * dt; s.y += s.vy * dt; s.a += s.va * dt; s.vx *= 0.99;
+      if (s.x < 4 || s.x > W - 4) { s.vx *= -0.4; s.x = Math.max(4, Math.min(W - 4, s.x)); }
+      if (s.y > floorY - 3) { s.y = floorY - 3; s.vy *= -0.25; s.vx *= 0.6; s.va *= 0.5; if (Math.abs(s.vy) < 60) s.rest = true; }
+    } else s.life -= dt * 0.08;
+    if (s.life <= 0) shreds.splice(i, 1);
+  }
+  for (let i = rings.length - 1; i >= 0; i--) { const r = rings[i]; r.life -= dt * 3.2; r.r += dt * 600; if (r.life <= 0) rings.splice(i, 1); }
+  for (const b of balloons) b.wob *= 1 - dt * 2;
+}
+function addPuddle(x, r) {
+  const amt = r * r * 0.9;
+  for (const p of puddles) {
+    if (Math.abs(p.x - x) < p.tw * 0.6 + 10) {
+      p.tw = Math.min(W * 0.4, Math.sqrt(p.tw * p.tw + amt * 8)); p.a = Math.min(0.85, p.a + 0.02);
+      p.x += (x - p.x) * 0.02; return;
+    }
+  }
+  if (puddles.length > 60) puddles.shift();
+  puddles.push({ x, w: 2, tw: Math.max(6, r * 3), a: 0.5 });
+}
+
+// ---------- rendering ----------
+let bgCache = null, bgW = 0, bgH = 0;
+function drawBackground() {
+  if (!bgCache || bgW !== cv.width || bgH !== cv.height) {
+    bgCache = document.createElement('canvas'); bgCache.width = cv.width; bgCache.height = cv.height;
+    bgW = cv.width; bgH = cv.height;
+    const c = bgCache.getContext('2d'); c.scale(DPR, DPR);
+    const sky = c.createLinearGradient(0, 0, 0, floorY);
+    sky.addColorStop(0, '#7ec8e3'); sky.addColorStop(0.65, '#c3ecf7'); sky.addColorStop(1, '#e9f8f1');
+    c.fillStyle = sky; c.fillRect(0, 0, W, floorY);
+    // sun
+    const sg = c.createRadialGradient(W * 0.82, H * 0.16, 0, W * 0.82, H * 0.16, Math.min(W, H) * 0.35);
+    sg.addColorStop(0, 'rgba(255,250,210,.95)'); sg.addColorStop(0.15, 'rgba(255,240,170,.7)'); sg.addColorStop(1, 'rgba(255,240,170,0)');
+    c.fillStyle = sg; c.fillRect(0, 0, W, floorY);
+    // soft clouds
+    c.fillStyle = 'rgba(255,255,255,.55)';
+    const cl = [[0.18, 0.18, 1], [0.5, 0.1, 0.7], [0.68, 0.3, 0.8]];
+    for (const [cx, cy, s] of cl) for (let k = 0; k < 5; k++) { c.beginPath(); c.ellipse(W * cx + (k - 2) * 38 * s, H * cy + Math.abs(k - 2) * 8 * s, 46 * s, 26 * s, 0, 0, 7); c.fill(); }
+    // distant hedge
+    c.fillStyle = '#7fbf8a';
+    c.beginPath(); c.moveTo(0, floorY);
+    for (let x = 0; x <= W + 40; x += 40) c.quadraticCurveTo(x + 20, floorY - 60 - 18 * Math.sin(x * 0.03), x + 40, floorY - 44 - 10 * Math.cos(x * 0.05));
+    c.lineTo(W, floorY); c.fill();
+    c.fillStyle = '#5fa56e';
+    c.beginPath(); c.moveTo(0, floorY);
+    for (let x = 0; x <= W + 30; x += 30) c.quadraticCurveTo(x + 15, floorY - 30 - 10 * Math.sin(x * 0.07), x + 30, floorY - 22);
+    c.lineTo(W, floorY); c.fill();
+    // patio floor
+    const fl = c.createLinearGradient(0, floorY, 0, H);
+    fl.addColorStop(0, '#d9c7a7'); fl.addColorStop(1, '#a88f6b');
+    c.fillStyle = fl; c.fillRect(0, floorY, W, H - floorY);
+    c.strokeStyle = 'rgba(90,65,40,.25)'; c.lineWidth = 1;
+    for (let k = 1; k < 4; k++) { const y = floorY + (H - floorY) * (k * k) / 16; c.beginPath(); c.moveTo(0, y); c.lineTo(W, y); c.stroke(); }
+    for (let x = -W; x < W * 2; x += 90) { c.beginPath(); c.moveTo(W / 2 + (x - W / 2) * 0.6, floorY); c.lineTo(W / 2 + (x - W / 2) * 1.4, H); c.stroke(); }
+    c.fillStyle = 'rgba(255,255,255,.35)'; c.fillRect(0, floorY, W, 2);
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(bgCache, 0, 0);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+
+function smoothPath(c, p) {
+  const n = p.length;
+  c.beginPath();
+  let mx = (p[n - 1].x + p[0].x) / 2, my = (p[n - 1].y + p[0].y) / 2;
+  c.moveTo(mx, my);
+  for (let i = 0; i < n; i++) {
+    const a = p[i], b = p[(i + 1) % n];
+    c.quadraticCurveTo(a.x, a.y, (a.x + b.x) / 2, (a.y + b.y) / 2);
+  }
+  c.closePath();
+}
+
+function drawBalloon(b) {
+  const p = b.pts, [base, light, dark] = b.col;
+  const r = b.r;
+  // light direction fixed (top-left) for a coherent scene
+  const hx = b.cx - r * 0.38, hy = b.cy - r * 0.42;
+  const grd = ctx.createRadialGradient(hx, hy, r * 0.08, b.cx, b.cy, r * 1.35);
+  grd.addColorStop(0, light); grd.addColorStop(0.45, base); grd.addColorStop(1, dark);
+  smoothPath(ctx, p);
+  ctx.globalAlpha = 0.93; ctx.fillStyle = grd; ctx.fill(); ctx.globalAlpha = 1;
+  // inner water slosh: a lighter band near the bottom, follows gravity
+  ctx.save(); smoothPath(ctx, p); ctx.clip();
+  const tilt = Math.max(-0.5, Math.min(0.5, -b.vx / 2500));
+  const lvl = b.cy - r * 0.15 + Math.max(-r * 0.4, Math.min(r * 0.4, b.vy / 30));
+  const t = simTime * 3 + b.id;
+  ctx.beginPath(); ctx.moveTo(b.minx - 10, lvl - tilt * r);
+  const amp = 2 + b.wob * 7;
+  for (let k = 0; k <= 8; k++) { const x = b.minx - 10 + (b.maxx - b.minx + 20) * k / 8; ctx.lineTo(x, lvl + tilt * (x - b.cx) + Math.sin(t + k * 1.3) * amp); }
+  ctx.lineTo(b.maxx + 10, b.maxy + 10); ctx.lineTo(b.minx - 10, b.maxy + 10); ctx.closePath();
+  ctx.fillStyle = 'rgba(255,255,255,.10)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1.5; ctx.stroke();
+  // rim shading
+  ctx.restore();
+  smoothPath(ctx, p);
+  ctx.strokeStyle = dark; ctx.globalAlpha = 0.55; ctx.lineWidth = 1.6; ctx.stroke(); ctx.globalAlpha = 1;
+  // specular highlight follows the deformation via nearby points
+  // highlight anchored to the boundary point facing the light (upper-left)
+  let q = p[0], qs = -1e9;
+  for (const o of p) { const v = (o.x - b.cx) * -0.6 + (o.y - b.cy) * -0.8; if (v > qs) { qs = v; q = o; } }
+  const sx = b.cx + (q.x - b.cx) * 0.55, sy = b.cy + (q.y - b.cy) * 0.55;
+  ctx.save(); ctx.translate(sx, sy); ctx.rotate(-0.7);
+  const sgr = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 0.3);
+  sgr.addColorStop(0, 'rgba(255,255,255,.95)'); sgr.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sgr; ctx.beginPath(); ctx.ellipse(0, 0, r * 0.3, r * 0.16, 0, 0, 7); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.beginPath(); ctx.arc(b.cx + (q.x - b.cx) * 0.25 + r * 0.05, b.cy + (q.y - b.cy) * 0.25 + r * 0.12, r * 0.05, 0, 7); ctx.fill();
+  // knot at point 0
+  const k0 = p[0], kp = p[N - 1], kn = p[1];
+  let nx = (kn.y - kp.y), ny = -(kn.x - kp.x); const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
+  const tx = -ny, ty = nx, ks = r * 0.11;
+  ctx.fillStyle = dark;
+  ctx.beginPath();
+  ctx.moveTo(k0.x + tx * ks * 0.5 - nx * 2, k0.y + ty * ks * 0.5 - ny * 2);
+  ctx.lineTo(k0.x - tx * ks * 0.5 - nx * 2, k0.y - ty * ks * 0.5 - ny * 2);
+  ctx.lineTo(k0.x - tx * ks * 0.9 + nx * ks * 1.4, k0.y - ty * ks * 0.9 + ny * ks * 1.4);
+  ctx.quadraticCurveTo(k0.x + nx * ks * 1.9, k0.y + ny * ks * 1.9, k0.x + tx * ks * 0.9 + nx * ks * 1.4, k0.y + ty * ks * 0.9 + ny * ks * 1.4);
+  ctx.closePath(); ctx.fill();
+  // damage hint: tiny stress lines
+  if (b.damage > 0.35) {
+    ctx.strokeStyle = 'rgba(255,255,255,' + Math.min(0.6, b.damage * 0.5) + ')'; ctx.lineWidth = 1;
+    for (let k = 0; k < 3; k++) { const a = b.id * 2 + k * 2.1; ctx.beginPath(); ctx.moveTo(b.cx + Math.cos(a) * r * 0.3, b.cy + Math.sin(a) * r * 0.3); ctx.lineTo(b.cx + Math.cos(a + 0.3) * r * 0.6, b.cy + Math.sin(a + 0.3) * r * 0.6); ctx.stroke(); }
+  }
+}
+
+function drawShadow(b) {
+  const h = Math.max(0, floorY - b.maxy);
+  const s = 1 / (1 + h / 250);
+  const w = (b.maxx - b.minx) * 0.55 * (0.5 + 0.5 * s);
+  ctx.fillStyle = 'rgba(40,30,20,' + (0.28 * s) + ')';
+  ctx.beginPath(); ctx.ellipse(b.cx, floorY + 3, w, Math.max(2, w * 0.14), 0, 0, 7); ctx.fill();
+}
+
+function render() {
+  drawBackground();
+  // puddles
+  for (const p of puddles) {
+    const a = Math.max(0, Math.min(1, p.a));
+    ctx.fillStyle = 'rgba(70,140,200,' + (a * 0.45) + ')';
+    ctx.beginPath(); ctx.ellipse(p.x, floorY + 4, p.w, Math.max(2, p.w * 0.12), 0, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,' + (a * 0.35) + ')';
+    ctx.beginPath(); ctx.ellipse(p.x - p.w * 0.25, floorY + 2.5, p.w * 0.35, Math.max(1, p.w * 0.03), 0, 0, 7); ctx.fill();
+  }
+  for (const b of balloons) drawShadow(b);
+  for (const s of shreds) {
+    ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(s.a); ctx.globalAlpha = Math.max(0, Math.min(1, s.life * 2));
+    ctx.strokeStyle = s.col[0]; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(s.pts[0][0], s.pts[0][1]);
+    for (let k = 1; k < s.pts.length; k++) ctx.lineTo(s.pts[k][0], s.pts[k][1]);
+    ctx.stroke();
+    if (s.knot) { ctx.fillStyle = s.col[2]; ctx.beginPath(); ctx.arc(s.pts[0][0], s.pts[0][1], 3.5, 0, 7); ctx.fill(); }
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  // sort by depth-ish (grabbed on top)
+  const order = balloons.slice().sort((a, b) => (isGrabbed(a) ? 1 : 0) - (isGrabbed(b) ? 1 : 0));
+  for (const b of order) drawBalloon(b);
+  // drops
+  ctx.lineCap = 'round';
+  for (const d of drops) {
+    const sp = Math.hypot(d.vx, d.vy), st = Math.min(4, sp / 400);
+    ctx.strokeStyle = 'rgba(120,190,245,.85)'; ctx.lineWidth = d.r * 2;
+    ctx.beginPath(); ctx.moveTo(d.x - d.vx / (sp || 1) * d.r * st, d.y - d.vy / (sp || 1) * d.r * st); ctx.lineTo(d.x, d.y); ctx.stroke();
+    if (d.r > 2) { ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.beginPath(); ctx.arc(d.x - d.r * 0.3, d.y - d.r * 0.3, d.r * 0.35, 0, 7); ctx.fill(); }
+  }
+  for (const r of rings) {
+    ctx.strokeStyle = 'rgba(255,255,255,' + (r.life * 0.8) + ')'; ctx.lineWidth = 3 * r.life + 1;
+    ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, 7); ctx.stroke();
+  }
+}
+
+// ---------- input ----------
+function toLocal(e) { const rc = cv.getBoundingClientRect(); return [e.clientX - rc.left, e.clientY - rc.top]; }
+function pickBalloon(x, y) {
+  for (let i = balloons.length - 1; i >= 0; i--) {
+    const b = balloons[i]; bounds(b);
+    if (pointInPoly(x, y, b.pts)) return b;
+  }
+  // forgiving: nearest balloon within a margin (touch fingers are fat)
+  let best = null, bd = 1e9;
+  for (const b of balloons) {
+    const d = Math.hypot(b.cx - x, b.cy - y) - b.r;
+    if (d < bd) { bd = d; best = b; }
+  }
+  return bd < 28 ? best : null;
+}
+let lastEmptyTap = { t: -1, x: 0, y: 0 };
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  initAudio();
+  const [x, y] = toLocal(e);
+  const b = pickBalloon(x, y);
+  const now = performance.now();
+  hint.classList.add('hide');
+  if (!b) {
+    if (now - lastEmptyTap.t < 320 && Math.hypot(x - lastEmptyTap.x, y - lastEmptyTap.y) < 40) { addBalloon(x, Math.min(y, floorY - R0 * 1.2)); lastEmptyTap.t = -1; }
+    else lastEmptyTap = { t: now, x, y };
+    return;
+  }
+  if (now - b.lastTap < 320) { popBalloon(b, 'tap'); return; }
+  b.lastTap = now;
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  const ox = new Float32Array(N), oy = new Float32Array(N), w = new Float32Array(N);
+  const sig = b.r * b.r * 0.9;
+  for (let i = 0; i < N; i++) {
+    const p = b.pts[i]; ox[i] = p.x - x; oy[i] = p.y - y;
+    const d2 = ox[i] * ox[i] + oy[i] * oy[i];
+    w[i] = Math.exp(-d2 / sig);
+  }
+  grabs.set(e.pointerId, { b, ox, oy, w, ang0: b.ang || 0, tx: x, ty: y, gx: x, gy: y });
+  cv.classList.add('grabbing');
+  sndSquish();
+});
+cv.addEventListener('pointermove', e => {
+  const g = grabs.get(e.pointerId); if (!g) return;
+  e.preventDefault();
+  const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : null;
+  const src = evs && evs.length ? evs[evs.length - 1] : e;
+  const [x, y] = toLocal(src);
+  g.tx = Math.max(0, Math.min(W, x)); g.ty = Math.max(0, Math.min(floorY, y));
+});
+function endPointer(e) {
+  if (grabs.delete(e.pointerId) && grabs.size === 0) cv.classList.remove('grabbing');
+  try { cv.releasePointerCapture(e.pointerId); } catch (_) {}
+}
+cv.addEventListener('pointerup', endPointer);
+cv.addEventListener('pointercancel', endPointer);
+cv.addEventListener('lostpointercapture', e => { if (grabs.has(e.pointerId)) endPointer(e); });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+document.getElementById('reset').addEventListener('click', () => { initAudio(); reset(); });
+document.getElementById('add').addEventListener('click', () => { initAudio(); addBalloon(); });
+const soundBtn = document.getElementById('sound');
+let soundOn = true;
+soundBtn.addEventListener('click', () => { soundOn = !soundOn; soundBtn.textContent = soundOn ? '🔊 Sound' : '🔇 Muted'; soundBtn.setAttribute('aria-pressed', String(soundOn)); initAudio(); });
+window.addEventListener('keydown', e => {
+  if (e.key === 'r' || e.key === 'R') reset();
+  else if (e.key === 'b' || e.key === 'B' || e.key === '+') addBalloon();
+});
+window.addEventListener('resize', () => { resize(); bgCache = null; });
+
+// ---------- audio (synthesized) ----------
+let AC = null, noiseBuf = null, lastThud = 0;
+function initAudio() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    noiseBuf = AC.createBuffer(1, AC.sampleRate * 1, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  } catch (_) { AC = null; }
+}
+function noise(dur, type, freq, q, gain, t0 = 0) {
+  const t = AC.currentTime + t0;
+  const s = AC.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 0.8 + Math.random() * 0.4;
+  const f = AC.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+  const g = AC.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+  s.connect(f); f.connect(g); g.connect(AC.destination); s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.02);
+  return f;
+}
+function tone(f0, f1, dur, gain, type = 'sine') {
+  const t = AC.currentTime;
+  const o = AC.createOscillator(); o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  const g = AC.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(gain, t + 0.006); g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+  o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function sndPop() { if (!AC || !soundOn) return; noise(0.07, 'highpass', 1800, 0.7, 0.55); tone(320, 60, 0.12, 0.35); }
+function sndSplash(s) {
+  if (!AC || !soundOn) return;
+  const f = noise(0.55 * s + 0.15, 'bandpass', 900, 0.8, 0.35 * s, 0.02);
+  f.frequency.setValueAtTime(2200, AC.currentTime); f.frequency.exponentialRampToValueAtTime(380, AC.currentTime + 0.5);
+  for (let k = 0; k < 4; k++) setTimeout(() => soundOn && AC && tone(500 + Math.random() * 900, 200 + Math.random() * 200, 0.06, 0.05), 80 + k * 70 + Math.random() * 60);
+}
+function sndThud(s) {
+  if (!AC || !soundOn) return; const now = performance.now(); if (now - lastThud < 50) return; lastThud = now;
+  tone(140 + Math.random() * 40, 55, 0.18, 0.35 * s); noise(0.12, 'lowpass', 700, 0.5, 0.18 * s);
+}
+function sndSquish() { if (!AC || !soundOn) return; tone(220, 330, 0.08, 0.06, 'triangle'); }
+
+// ---------- loop ----------
+let last = performance.now(), acc = 0;
+function frame(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (dt > 0.1) dt = 0.1; if (dt < 0) dt = 0;
+  acc += dt;
+  let steps = Math.floor(acc / DT);
+  const MAXS = 5;
+  if (steps > MAXS) { steps = MAXS; acc = 0; } else acc -= steps * DT;
+  for (let s = 0; s < steps; s++) step(1 / (steps - s));
+  updateParticles(steps * DT);
+  render();
+  requestAnimationFrame(frame);
+}
+resize(); reset();
+for (const b of balloons) bounds(b);
+// test/debug hook
+window.__wb = { get balloons() { return balloons; }, get pops() { return pops; }, popLog, get drops() { return drops.length; }, get puddles() { return puddles.length; }, reset, addBalloon };
+requestAnimationFrame(frame);
+setTimeout(() => hint.classList.add('hide'), 9000);
+})();
+</script>
+</body>
+</html>

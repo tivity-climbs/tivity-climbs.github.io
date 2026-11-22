@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Orbit Courier</title>
+<style>
+  :root{
+    --ink:#e8ecf4; --dim:#8b94a7; --gold:#ffcf5c; --bad:#ff5c6a; --good:#6ee7a8;
+    --panel:rgba(10,14,24,.82);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:#05070d}
+  body{font-family:"Avenir Next","Segoe UI",system-ui,sans-serif;color:var(--ink);
+       -webkit-user-select:none;user-select:none}
+  #game{display:block;width:100vw;height:100vh;touch-action:none;cursor:crosshair}
+
+  /* ---------- overlays ---------- */
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+           background:rgba(4,6,12,.72);backdrop-filter:blur(3px);z-index:10;padding:16px}
+  .overlay.hidden{display:none}
+  .card{background:var(--panel);border:1px solid rgba(140,160,200,.25);border-radius:18px;
+        padding:28px 34px;max-width:560px;width:100%;text-align:center;
+        box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  h1{font-size:clamp(26px,5vw,40px);letter-spacing:.14em;font-weight:800;color:var(--gold);
+     text-transform:uppercase;margin-bottom:4px}
+  .tag{color:var(--dim);font-size:14px;letter-spacing:.08em;margin-bottom:18px}
+  .obj{font-size:15px;line-height:1.55;text-align:left;background:rgba(255,255,255,.04);
+       border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px 16px;margin-bottom:16px}
+  .obj b{color:var(--gold)}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13.5px;
+        text-align:left;margin-bottom:20px;align-items:center}
+  .keys .k{justify-self:end}
+  kbd{display:inline-block;background:#1b2233;border:1px solid #38445f;border-bottom-width:3px;
+      border-radius:6px;padding:2px 8px;font:600 12px/1.5 ui-monospace,monospace;color:#cfe0ff}
+  .go{font:inherit;font-weight:700;font-size:16px;letter-spacing:.06em;color:#081018;
+      background:var(--gold);border:0;border-radius:10px;padding:12px 26px;cursor:pointer}
+  .go:hover{filter:brightness(1.1)}
+  .hint{margin-top:12px;color:var(--dim);font-size:12.5px}
+  #endTitle.win{color:var(--good)}
+  #endTitle.lose{color:var(--bad)}
+  .stat{font-size:15px;margin:6px 0}
+  .stat b{color:var(--gold)}
+</style>
+</head>
+<body>
+<canvas id="game" aria-label="Orbit Courier game canvas"></canvas>
+
+<!-- START -->
+<div class="overlay" id="startOverlay">
+  <div class="card">
+    <h1>Orbit Courier</h1>
+    <div class="tag">GRAVITY IS YOUR ENGINE · THRUST IS YOUR EMERGENCY BRAKE</div>
+    <div class="obj">
+      <b>Mission:</b> you are a courier for the outer moons. Fly to the
+      <b>amber moon</b> to <b>pick up</b> a package, then carry it to the
+      <b>green moon</b> to <b>deliver</b> it. Complete <b>5 deliveries</b> to win.
+      Planets and the sun pull on your ship — coast on their gravity to save fuel
+      (solar panels slowly recharge the tank while you coast).
+      Touching any surface at speed <b>destroys</b> you.
+    </div>
+    <div class="keys">
+      <span class="k"><kbd>W</kbd>/<kbd>↑</kbd> or <kbd>Space</kbd></span><span>Thrust forward</span>
+      <span class="k"><kbd>A</kbd> <kbd>D</kbd> / <kbd>←</kbd> <kbd>→</kbd></span><span>Rotate ship</span>
+      <span class="k"><kbd>S</kbd>/<kbd>↓</kbd></span><span>Retro-thrust (slower, saves fuel)</span>
+      <span class="k">Hold <b>mouse / finger</b></span><span>Ship steers to pointer &amp; thrusts toward it</span>
+      <span class="k"><kbd>R</kbd></span><span>Restart</span>
+    </div>
+    <button class="go" id="startBtn" aria-label="Start game">Launch Courier</button>
+    <div class="hint">or press any key · grab floating fuel canisters when you run low</div>
+  </div>
+</div>
+
+<!-- END (win / lose) -->
+<div class="overlay hidden" id="endOverlay">
+  <div class="card">
+    <h1 id="endTitle">—</h1>
+    <div class="tag" id="endSub">—</div>
+    <div class="stat" id="endScore">—</div>
+    <div class="stat" id="endDrops">—</div>
+    <div class="stat" id="endTime">—</div>
+    <br>
+    <button class="go" id="restartBtn" aria-label="Restart game">Fly Again</button>
+    <div class="hint">or press R</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================
+   ORBIT COURIER — original single-file gravity-courier game.
+   No libraries, no external assets. Code-only audio (WebAudio).
+   ============================================================ */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
+}
+window.addEventListener("resize", resize); resize();
+
+/* ---------------- tuned constants ---------------- */
+const G          = 1100;   // gravity constant (accel = G*mass/d^2, mass = r^2)
+const SUN_MASS   = 4.0;    // multiplier on sun mass
+const DT         = 1/120;  // fixed physics step
+const MAX_STEPS  = 8;      // bounded catch-up per frame
+const THRUST     = 190;    // px/s^2
+const RETRO      = 90;
+const ROT_SPEED  = 3.4;    // rad/s
+const SOFT_CAP   = 720;    // px/s
+const FUEL_MAX   = 100;
+const FUEL_BURN  = 6.5;    // per second full thrust
+const FUEL_REGEN = 1.4;    // per second solar recharge while coasting
+const FUEL_DELIV = 45;     // refuel per delivery
+const FUEL_CAN   = 30;     // refuel per canister
+const STRAND_S   = 22;     // seconds of zero fuel before "stranded" loss
+const DROPS_TO_WIN = 5;
+const BOUNDARY_R = 2400;
+const PICKUP_R   = 90;     // proximity to interact with a moon
+const SHIP_R     = 10;
+
+/* ---------------- world bodies ---------------- */
+// sun at origin
+const sun = { name:"SUN", x:0, y:0, r:62, massMul:SUN_MASS, isSun:true };
+const planets = [
+  { name:"AURELIA", orbitR:620,  speed: 0.050, a:0.9, r:34, hue: 28, massMul:0.55,
+    moons:[ { name:"LUNA",   orbitR:95,  speed: 0.50, a:0.0, r:10, massMul:0.5 } ] },
+  { name:"VESSA",   orbitR:1080, speed:-0.032, a:2.4, r:44, hue:205, massMul:0.55,
+    moons:[ { name:"PHOBOS",  orbitR:112, speed: 0.40, a:0.8, r:12, massMul:0.5 },
+            { name:"EUROPA",  orbitR:180, speed:-0.62, a:3.6, r:9,  massMul:0.5 } ] },
+  { name:"KHIONE",  orbitR:1560, speed: 0.021, a:4.3, r:28, hue:160, massMul:0.55,
+    moons:[ { name:"IO",      orbitR:88,  speed: 0.78, a:1.9, r:9,  massMul:0.5 } ] },
+];
+const allMoons = [];   // flat list for missions
+for (const p of planets) for (const m of p.moons){ m.parent = p; allMoons.push(m); }
+
+function updateBodies(dt){
+  for (const p of planets){
+    p.a += p.speed * dt;
+    p.x = Math.cos(p.a) * p.orbitR; p.y = Math.sin(p.a) * p.orbitR;
+    for (const m of p.moons){
+      m.a += m.speed * dt;
+      m.x = p.x + Math.cos(m.a) * m.orbitR;
+      m.y = p.y + Math.sin(m.a) * m.orbitR;
+    }
+  }
+}
+function gravBodies(){ // list of {x,y,r,massMul,name,isSun}
+  const list = [sun];
+  for (const p of planets) list.push(p);
+  for (const m of allMoons) list.push(m);
+  return list;
+}
+function gravityAt(x, y, out){
+  out.x = 0; out.y = 0;
+  for (const b of gravBodies()){
+    const dx = b.x - x, dy = b.y - y;
+    const d2 = Math.max(dx*dx + dy*dy, 400);
+    const d  = Math.sqrt(d2);
+    const a  = G * (b.r*b.r) * (b.massMul || 1) / d2;
+    out.x += a * dx / d; out.y += a * dy / d;
+  }
+  // soft boundary: gentle push back toward the sun beyond the belt
+  const d = Math.hypot(x, y);
+  if (d > BOUNDARY_R){ const k = (d - BOUNDARY_R) * 0.4; out.x -= k * x/d; out.y -= k * y/d; }
+  return out;
+}
+
+/* ---------------- canisters ---------------- */
+function spawnCanister(){
+  for (let tries = 0; tries < 40; tries++){
+    const ang = Math.random() * Math.PI * 2;
+    const rad = 420 + Math.random() * (BOUNDARY_R - 700);
+    const x = Math.cos(ang)*rad, y = Math.sin(ang)*rad;
+    let ok = true;
+    for (const b of gravBodies()){
+      if (Math.hypot(b.x - x, b.y - y) < (b.r || 0) + 140) { ok = false; break; }
+    }
+    if (ok) return { x, y, t: Math.random()*10, alive: true, respawn: 0 };
+  }
+  return { x: 900, y: 0, t: 0, alive: true, respawn: 0 };
+}
+
+/* ---------------- game state ---------------- */
+const state = {};
+function reset(){
+  state.phase   = "menu";            // menu | fly | end
+  state.result  = null;              // "win" | "lose"
+  state.reason  = "";
+  state.t       = 0;                 // game clock (s)
+  state.missionT= 0;
+  state.score   = 0;
+  state.drops   = 0;
+  state.fuel    = FUEL_MAX;
+  state.carrying= false;
+  state.ship    = { x: 0, y: -820, vx: 145, vy: 0, ang: Math.PI/2 }; // near-circular start
+  state.thrusting = false; state.retro = false;
+  state.strand  = 0;                 // seconds at zero fuel
+  state.trail   = [];
+  state.mission = newMission();
+  state.canisters = [];
+  for (let i = 0; i < 5; i++) state.canisters.push(spawnCanister());
+  state.flash   = 0;                 // white flash on events
+  state.shake   = 0;
+  state.particles = [];
+  cam.x = state.ship.x; cam.y = state.ship.y; cam.zoom = baseZoom();
+}
+function newMission(){
+  const from = allMoons[(Math.random()*allMoons.length)|0];
+  let to = allMoons[(Math.random()*allMoons.length)|0];
+  while (to === from) to = allMoons[(Math.random()*allMoons.length)|0];
+  return { from, to, phase: "pickup" };
+}
+const cam = { x:0, y:0, zoom:1 };
+function baseZoom(){ return Math.min(W, H) / 950; }
+
+/* ---------------- audio (code-only) ---------------- */
+let AC = null, thrustGain = null;
+function audio(){
+  if (!AC){
+    try{
+      AC = new (window.AudioContext || window.webkitAudioContext)();
+      const len = AC.sampleRate * 0.5;
+      const buf = AC.createBuffer(1, len, AC.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random()*2-1;
+      const src = AC.createBufferSource(); src.buffer = buf; src.loop = true;
+      const lp = AC.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 420;
+      thrustGain = AC.createGain(); thrustGain.gain.value = 0;
+      src.connect(lp).connect(thrustGain).connect(AC.destination); src.start();
+    }catch(e){ AC = null; }
+  }
+  if (AC && AC.state === "suspended") AC.resume();
+  return AC;
+}
+function blip(freq, dur, type, vol){
+  const ac = audio(); if (!ac) return;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type || "triangle"; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol || .18, ac.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001, ac.currentTime + dur);
+  o.connect(g).connect(ac.destination); o.start(); o.stop(ac.currentTime + dur);
+}
+function chord(freqs, dur){ freqs.forEach((f,i)=>setTimeout(()=>blip(f, dur, "triangle", .14), i*90)); }
+function boom(){
+  const ac = audio(); if (!ac) return;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = "sawtooth"; o.frequency.setValueAtTime(160, ac.currentTime);
+  o.frequency.exponentialRampToValueAtTime(30, ac.currentTime + .7);
+  g.gain.setValueAtTime(.3, ac.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001, ac.currentTime + .8);
+  o.connect(g).connect(ac.destination); o.start(); o.stop(ac.currentTime + .8);
+}
+function setThrustSound(on, retro){
+  if (!thrustGain) return;
+  thrustGain.gain.setTargetAtTime(on ? (retro ? .035 : .07) : 0, audio().currentTime, .04);
+}
+
+/* ---------------- input ---------------- */
+const keys = new Set();
+let pointerDown = false, pointer = { x:0, y:0 };
+
+window.addEventListener("keydown", e => {
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+  if (state.phase === "menu"){ startGame(); return; }
+  if (state.phase === "end"){ if (e.key === "r" || e.key === "R") restart(); return; }
+  keys.add(e.key.toLowerCase());
+  if (e.key === "r" || e.key === "R") restart();
+  audio();
+});
+window.addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
+
+function screenToWorld(sx, sy){
+  return { x: (sx - W/2)/cam.zoom + cam.x, y: (sy - H/2)/cam.zoom + cam.y };
+}
+canvas.addEventListener("pointerdown", e => {
+  audio();
+  if (state.phase === "menu"){ startGame(); return; }
+  pointerDown = true; canvas.setPointerCapture(e.pointerId);
+  const p = screenToWorld(e.clientX, e.clientY); pointer.x = p.x; pointer.y = p.y;
+});
+canvas.addEventListener("pointermove", e => {
+  if (!pointerDown) return;
+  const p = screenToWorld(e.clientX, e.clientY); pointer.x = p.x; pointer.y = p.y;
+});
+const endPointer = () => { pointerDown = false; };
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+
+document.getElementById("startBtn").addEventListener("click", startGame);
+document.getElementById("startOverlay").addEventListener("pointerdown", e => {
+  if (e.target.closest("button")) return;   // button handles itself
+  startGame();
+});
+document.getElementById("endOverlay").addEventListener("pointerdown", e => {
+  if (e.target.closest("button")) return;
+  restart();
+});
+document.getElementById("restartBtn").addEventListener("click", restart);
+function startGame(){
+  if (state.phase === "fly") return;
+  if (state.phase === "menu" && state.score === 0 && state.drops === 0 && state.t === 0){ /* fresh */ }
+  reset(); state.phase = "fly";
+  document.getElementById("startOverlay").classList.add("hidden");
+  document.getElementById("endOverlay").classList.add("hidden");
+  chord([392, 523, 659], .25);
+}
+function restart(){
+  reset(); state.phase = "fly";
+  document.getElementById("startOverlay").classList.add("hidden");
+  document.getElementById("endOverlay").classList.add("hidden");
+  blip(520, .15);
+}
+function endGame(result, reason){
+  state.phase = "end"; state.result = result; state.reason = reason;
+  setThrustSound(false,false);
+  const t = document.getElementById("endTitle");
+  if (result === "win"){
+    t.className = "win"; t.textContent = "ALL DELIVERIES COMPLETE";
+    document.getElementById("endSub").textContent = "THE OUTER MOONS SALUTE YOU, COURIER.";
+    chord([523,659,784,1046], .3);
+  } else {
+    t.className = "lose"; t.textContent = result === "strand" ? "STRANDED IN THE VOID" : "SHIP DESTROYED";
+    document.getElementById("endSub").textContent = reason;
+    boom();
+  }
+  document.getElementById("endScore").innerHTML = "Score: <b>" + Math.round(state.score) + "</b>";
+  document.getElementById("endDrops").innerHTML = "Deliveries: <b>" + state.drops + " / " + DROPS_TO_WIN + "</b>";
+  const m = Math.floor(state.t/60), s = Math.floor(state.t%60);
+  document.getElementById("endTime").innerHTML = "Flight time: <b>" + m + ":" + String(s).padStart(2,"0") + "</b>";
+  document.getElementById("endOverlay").classList.remove("hidden");
+}
+
+/* ---------------- particles ---------------- */
+function puff(x, y, vx, vy, n, hue, spread){
+  for (let i = 0; i < n; i++){
+    const a = Math.random()*Math.PI*2, sp = Math.random()*spread;
+    state.particles.push({ x, y, vx: vx + Math.cos(a)*sp, vy: vy + Math.sin(a)*sp,
+      life: .5 + Math.random()*.6, t: 0, hue, r: 1.5 + Math.random()*2.5 });
+  }
+  if (state.particles.length > 400) state.particles.splice(0, state.particles.length - 400);
+}
+
+/* ---------------- simulation ---------------- */
+const gravTmp = { x:0, y:0 };
+function physicsStep(dt){
+  if (state.phase !== "fly") return;   // no simulation after win/lose
+  const s = state.ship;
+  updateBodies(dt);
+  state.t += dt; state.missionT += dt;
+
+  // --- controls ---
+  let thrustOn = false, retro = false;
+  if (state.fuel > 0){
+    if (keys.has("w") || keys.has("arrowup") || keys.has(" ")) thrustOn = true;
+    if (keys.has("s") || keys.has("arrowdown")){ thrustOn = true; retro = true; }
+    if (keys.has("a") || keys.has("arrowleft"))  s.ang -= ROT_SPEED * dt;
+    if (keys.has("d") || keys.has("arrowright")) s.ang += ROT_SPEED * dt;
+    if (pointerDown){
+      const want = Math.atan2(pointer.y - s.y, pointer.x - s.x);
+      let d = want - s.ang;
+      while (d >  Math.PI) d -= Math.PI*2;
+      while (d < -Math.PI) d += Math.PI*2;
+      const turn = Math.sign(d) * Math.min(Math.abs(d), ROT_SPEED * dt);
+      s.ang += turn;
+      thrustOn = true;
+    }
+  }
+  if (thrustOn && state.fuel > 0){
+    const acc = retro ? RETRO : THRUST;
+    const dir = retro ? -1 : 1;
+    s.vx += Math.cos(s.ang) * acc * dir * dt;
+    s.vy += Math.sin(s.ang) * acc * dir * dt;
+    state.fuel = Math.max(0, state.fuel - FUEL_BURN * dt * (retro ? .5 : 1));
+    // exhaust particles
+    if (Math.random() < .6){
+      const bx = s.x - Math.cos(s.ang)*dir*14, by = s.y - Math.sin(s.ang)*dir*14;
+      puff(bx, by, -Math.cos(s.ang)*dir*80 + s.vx*.2, -Math.sin(s.ang)*dir*80 + s.vy*.2, 1,
+           retro ? 205 : 38, 40);
+    }
+  }
+  state.thrusting = thrustOn && state.fuel > 0;
+  state.retro = retro;
+  setThrustSound(state.thrusting, retro);
+  if (!state.solarOff && !state.thrusting && state.fuel < FUEL_MAX)
+    state.fuel = Math.min(FUEL_MAX, state.fuel + FUEL_REGEN * dt);   // solar recharge
+
+  // --- gravity + integrate ---
+  gravityAt(s.x, s.y, gravTmp);
+  s.vx += gravTmp.x * dt; s.vy += gravTmp.y * dt;
+  const spd = Math.hypot(s.vx, s.vy);
+  if (spd > SOFT_CAP){ s.vx *= SOFT_CAP/spd; s.vy *= SOFT_CAP/spd; }
+  s.x += s.vx * dt; s.y += s.vy * dt;
+
+  // --- collisions: crash on any surface ---
+  for (const b of gravBodies()){
+    if (Math.hypot(b.x - s.x, b.y - s.y) < b.r + SHIP_R){
+      puff(s.x, s.y, 0, 0, 60, 20, 260);
+      state.shake = 14; state.flash = .8;
+      endGame("crash", "You hit " + (b.name || "a body") + " at " +
+              Math.round(Math.hypot(s.vx,s.vy)) + " px/s. Slow down before contact!");
+      return;
+    }
+  }
+
+  // --- fuel ---
+  if (state.fuel <= 0){
+    state.strand += dt;
+    if (state.strand >= STRAND_S){ endGame("strand", "Out of fuel and adrift. Grab glowing canisters next time!"); return; }
+  } else state.strand = 0;
+
+  // --- canisters ---
+  for (const c of state.canisters){
+    c.t += dt;
+    if (!c.alive){
+      c.respawn = (c.respawn || 0) + dt;
+      if (c.respawn > 18){ Object.assign(c, spawnCanister()); c.alive = true; c.respawn = 0; }
+      continue;
+    }
+    if (Math.hypot(c.x - s.x, c.y - s.y) < 42){
+      c.alive = false; c.respawn = 0;
+      state.fuel = Math.min(FUEL_MAX, state.fuel + FUEL_CAN);
+      state.score += 50;
+      state.flash = .25;
+      puff(c.x, c.y, 0, 0, 16, 52, 120);
+      blip(880, .12); setTimeout(()=>blip(1320,.12), 80);
+    }
+  }
+
+  // --- mission ---
+  const m = state.mission;
+  const target = m.phase === "pickup" ? m.from : m.to;
+  const d = Math.hypot(target.x - s.x, target.y - s.y);
+  if (d < target.r + PICKUP_R){
+    if (m.phase === "pickup"){
+      m.phase = "deliver"; state.carrying = true;
+      state.flash = .3;
+      puff(s.x, s.y, 0, 0, 20, 45, 120);
+      chord([660, 880], .18);
+      state.missionT = 0;
+    } else {
+      state.drops++;
+      const bonus = Math.max(0, 300 - Math.floor(state.missionT) * 6);
+      state.score += 500 + bonus;
+      state.fuel = Math.min(FUEL_MAX, state.fuel + FUEL_DELIV);
+      state.carrying = false;
+      state.flash = .5;
+      puff(s.x, s.y, 0, 0, 30, 140, 160);
+      chord([523, 659, 784], .2);
+      if (state.drops >= DROPS_TO_WIN){ endGame("win", ""); return; }
+      state.mission = newMission();
+      state.missionT = 0;
+    }
+  }
+
+  // --- trail ---
+  if ((state.t * 60 | 0) % 2 === 0){
+    state.trail.push({ x: s.x, y: s.y });
+    if (state.trail.length > 90) state.trail.shift();
+  }
+
+  // --- particles ---
+  for (let i = state.particles.length - 1; i >= 0; i--){
+    const p = state.particles[i];
+    p.t += dt; if (p.t > p.life){ state.particles.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= .985; p.vy *= .985;
+  }
+  state.flash = Math.max(0, state.flash - dt * 2);
+  state.shake = Math.max(0, state.shake - dt * 30);
+}
+
+/* ---------------- trajectory prediction (gravity only) ---------------- */
+function predict(){
+  const pts = [];
+  let x = state.ship.x, y = state.ship.y,
+      vx = state.ship.vx, vy = state.ship.vy;
+  const snapshot = [];
+  for (const p of planets){
+    snapshot.push({ p, a: p.a, ma: p.moons.map(mm => mm.a) });
+  }
+  const dt = 1/20, steps = 220;
+  const tmp = { x:0, y:0 };
+  for (let i = 0; i < steps; i++){
+    // advance the rails so prediction matches the real future
+    let k = 0;
+    for (const s2 of snapshot){
+      s2.p.a = s2.a + s2.p.speed * dt * (i+1);
+      s2.p.x = Math.cos(s2.p.a) * s2.p.orbitR; s2.p.y = Math.sin(s2.p.a) * s2.p.orbitR;
+      for (let j = 0; j < s2.p.moons.length; j++){
+        const mm = s2.p.moons[j];
+        mm.a = s2.ma[j] + mm.speed * dt * (i+1);
+        mm.x = s2.p.x + Math.cos(mm.a) * mm.orbitR;
+        mm.y = s2.p.y + Math.sin(mm.a) * mm.orbitR;
+      }
+      k++;
+    }
+    gravityAt(x, y, tmp);
+    vx += tmp.x * dt; vy += tmp.y * dt;
+    x += vx * dt; y += vy * dt;
+    let hit = null;
+    for (const b of gravBodies()){
+      if (Math.hypot(b.x - x, b.y - y) < b.r + SHIP_R){ hit = { x, y }; break; }
+    }
+    if (i % 4 === 0) pts.push({ x, y });
+    if (hit){ pts.push({ x: hit.x, y: hit.y, hit: true }); break; }
+  }
+  // restore live positions
+  for (const s2 of snapshot){
+    s2.p.a = s2.a;
+    s2.p.x = Math.cos(s2.p.a) * s2.p.orbitR; s2.p.y = Math.sin(s2.p.a) * s2.p.orbitR;
+    for (let j = 0; j < s2.p.moons.length; j++){
+      const mm = s2.p.moons[j];
+      mm.a = s2.ma[j];
+      mm.x = s2.p.x + Math.cos(mm.a) * mm.orbitR;
+      mm.y = s2.p.y + Math.sin(mm.a) * mm.orbitR;
+    }
+  }
+  return pts;
+}
+
+/* ---------------- rendering ---------------- */
+const stars = [];
+(function makeStars(){
+  let seed = 42;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (let i = 0; i < 420; i++){
+    const a = rnd()*Math.PI*2, r = Math.sqrt(rnd()) * 2700;
+    stars.push({ x: Math.cos(a)*r, y: Math.sin(a)*r, s: .5 + rnd()*1.4, tw: rnd()*6.28 });
+  }
+})();
+
+function applyCam(parallax){
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.translate(W/2, H/2);
+  ctx.scale(cam.zoom, cam.zoom);
+  const px = cam.x * (parallax || 1), py = cam.y * (parallax || 1);
+  ctx.translate(-px, -py);
+}
+function drawGlowRing(x, y, r, color, width, dash, phase){
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
+  ctx.strokeStyle = color; ctx.lineWidth = width;
+  ctx.setLineDash(dash || []);
+  ctx.lineDashOffset = phase || 0;
+  ctx.stroke(); ctx.setLineDash([]);
+}
+
+function render(now){
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  // sky
+  ctx.fillStyle = "#05070d"; ctx.fillRect(0, 0, W, H);
+
+  const shx = state.shake ? (Math.random()-.5)*state.shake : 0;
+  const shy = state.shake ? (Math.random()-.5)*state.shake : 0;
+
+  // starfield (parallax)
+  applyCam(.55);
+  ctx.translate(shx*.5, shy*.5);
+  for (const st of stars){
+    const tw = .35 + .35 * Math.sin(now*.001 + st.tw);
+    ctx.fillStyle = "rgba(200,215,255," + tw.toFixed(2) + ")";
+    ctx.fillRect(st.x, st.y, st.s, st.s);
+  }
+
+  // world
+  applyCam(1);
+  ctx.translate(shx, shy);
+
+  // orbit guides
+  ctx.lineWidth = 1;
+  for (const p of planets){
+    ctx.beginPath(); ctx.arc(0, 0, p.orbitR, 0, Math.PI*2);
+    ctx.strokeStyle = "rgba(120,140,190,.10)"; ctx.stroke();
+    for (const m of p.moons){
+      ctx.beginPath(); ctx.arc(p.x, p.y, m.orbitR, 0, Math.PI*2);
+      ctx.strokeStyle = "rgba(120,140,190,.08)"; ctx.stroke();
+    }
+  }
+
+  // boundary ring
+  drawGlowRing(0, 0, BOUNDARY_R, "rgba(255,120,120,.10)", 3, [10, 14], now*.01);
+
+  // sun
+  const sg = ctx.createRadialGradient(0, 0, 10, 0, 0, sun.r*2.6);
+  sg.addColorStop(0, "rgba(255,200,90,.55)");
+  sg.addColorStop(.5, "rgba(255,140,60,.15)");
+  sg.addColorStop(1, "rgba(255,120,40,0)");
+  ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(0, 0, sun.r*2.6, 0, Math.PI*2); ctx.fill();
+  const sg2 = ctx.createRadialGradient(-sun.r*.3, -sun.r*.3, 4, 0, 0, sun.r);
+  sg2.addColorStop(0, "#fff3c8"); sg2.addColorStop(.6, "#ffcf5c"); sg2.addColorStop(1, "#ff8f3c");
+  ctx.fillStyle = sg2; ctx.beginPath(); ctx.arc(0, 0, sun.r, 0, Math.PI*2); ctx.fill();
+
+  // planets + moons
+  for (const p of planets){
+    const g = ctx.createRadialGradient(p.x - p.r*.4, p.y - p.r*.4, p.r*.15, p.x, p.y, p.r);
+    g.addColorStop(0, "hsl(" + p.hue + ",55%,62%)");
+    g.addColorStop(1, "hsl(" + p.hue + ",50%,26%)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,.15)"; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  const m = state.mission;
+  for (const mm of allMoons){
+    // objective highlight
+    if (state.phase === "fly"){
+      const tgt = m.phase === "pickup" ? m.from : m.to;
+      if (mm === tgt){
+        const pulse = 1 + Math.sin(now*.006)*.12;
+        drawGlowRing(mm.x, mm.y, (mm.r + 26) * pulse,
+          m.phase === "pickup" ? "rgba(255,207,92,.8)" : "rgba(110,231,168,.85)", 2.5, [6, 8], now*.03);
+        drawGlowRing(mm.x, mm.y, mm.r + PICKUP_R, "rgba(255,255,255,.10)", 1.5, [2, 6], 0);
+      }
+    }
+    const g = ctx.createRadialGradient(mm.x - mm.r*.4, mm.y - mm.r*.4, 1, mm.x, mm.y, mm.r);
+    g.addColorStop(0, "#cfd6e4"); g.addColorStop(1, "#5a6377");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(mm.x, mm.y, mm.r, 0, Math.PI*2); ctx.fill();
+  }
+
+  // canisters
+  for (const c of state.canisters){
+    if (!c.alive) continue;
+    const bob = Math.sin(now*.003 + c.t) * 3;
+    ctx.save(); ctx.translate(c.x, c.y + bob); ctx.rotate(c.t * .8);
+    const cg = ctx.createRadialGradient(0, 0, 2, 0, 0, 26);
+    cg.addColorStop(0, "rgba(110,231,168,.5)"); cg.addColorStop(1, "rgba(110,231,168,0)");
+    ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(0, 0, 26, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#123526"; ctx.strokeStyle = "#6ee7a8"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(-8, -11, 16, 22, 4); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#6ee7a8"; ctx.fillRect(-5, -6, 10, 4); ctx.fillRect(-5, 1, 10, 4);
+    ctx.restore();
+  }
+
+  // predicted trajectory
+  if (state.phase === "fly"){
+    const pts = predict();
+    ctx.fillStyle = "rgba(160,200,255,.35)";
+    for (const pt of pts){
+      if (pt.hit){
+        ctx.strokeStyle = "rgba(255,92,106,.9)"; ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(pt.x - 8, pt.y - 8); ctx.lineTo(pt.x + 8, pt.y + 8);
+        ctx.moveTo(pt.x + 8, pt.y - 8); ctx.lineTo(pt.x - 8, pt.y + 8);
+        ctx.stroke();
+      } else {
+        ctx.fillRect(pt.x - 1.5, pt.y - 1.5, 3, 3);
+      }
+    }
+  }
+
+  // trail
+  ctx.lineWidth = 2;
+  for (let i = 1; i < state.trail.length; i++){
+    const a = i / state.trail.length;
+    ctx.strokeStyle = "rgba(120,180,255," + (a*.35).toFixed(2) + ")";
+    ctx.beginPath();
+    ctx.moveTo(state.trail[i-1].x, state.trail[i-1].y);
+    ctx.lineTo(state.trail[i].x, state.trail[i].y);
+    ctx.stroke();
+  }
+
+  // particles
+  for (const p of state.particles){
+    const a = 1 - p.t / p.life;
+    ctx.fillStyle = "hsla(" + p.hue + ",90%,60%," + (a*.9).toFixed(2) + ")";
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r * a + .4, 0, Math.PI*2); ctx.fill();
+  }
+
+  // ship
+  if (state.phase !== "end" || state.result === "win"){
+    const s = state.ship;
+    ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(s.ang);
+    if (state.thrusting){
+      const f = state.retro ? 9 : 16 + Math.sin(now*.05)*5;
+      const grad = ctx.createLinearGradient(-12, 0, -12 - f, 0);
+      grad.addColorStop(0, "rgba(255,220,120,.95)");
+      grad.addColorStop(1, "rgba(255,80,40,0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(-10, -4); ctx.lineTo(-10 - f, 0); ctx.lineTo(-10, 4);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = "#eef3ff";
+    ctx.beginPath(); ctx.moveTo(15, 0); ctx.lineTo(-10, -9); ctx.lineTo(-6, 0); ctx.lineTo(-10, 9);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "#3f6fd8"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#3f6fd8"; ctx.beginPath(); ctx.arc(3, 0, 3, 0, Math.PI*2); ctx.fill();
+    if (state.carrying){
+      ctx.fillStyle = "#ffcf5c"; ctx.strokeStyle = "#8a6a1c"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.roundRect(-16, -5, 9, 10, 2); ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // objective arrow (screen-space)
+  if (state.phase === "fly"){
+    const s = state.ship;
+    const tgt = m.phase === "pickup" ? m.from : m.to;
+    const dx = tgt.x - s.x, dy = tgt.y - s.y;
+    const dist = Math.hypot(dx, dy);
+    // arrow near ship
+    const ang = Math.atan2(dy, dx);
+    ctx.save();
+    ctx.translate(s.x + Math.cos(ang)*46, s.y + Math.sin(ang)*46);
+    ctx.rotate(ang);
+    ctx.fillStyle = m.phase === "pickup" ? "rgba(255,207,92,.9)" : "rgba(110,231,168,.9)";
+    ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(-6, -7); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill();
+    ctx.restore();
+    // edge pointer when far
+    if (dist * cam.zoom > Math.min(W, H) * .55){
+      const sx = (tgt.x - cam.x) * cam.zoom + W/2;
+      const sy = (tgt.y - cam.y) * cam.zoom + H/2;
+      const mx = 46, cx = Math.max(mx, Math.min(W - mx, sx)), cy = Math.max(mx, Math.min(H - mx, sy));
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(Math.atan2(sy - H/2, sx - W/2));
+      ctx.fillStyle = m.phase === "pickup" ? "rgba(255,207,92,.95)" : "rgba(110,231,168,.95)";
+      ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(-10, -9); ctx.lineTo(-10, 9); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = m.phase === "pickup" ? "#ffcf5c" : "#6ee7a8";
+      ctx.font = "600 12px ui-monospace,monospace"; ctx.textAlign = "center";
+      ctx.fillText(Math.round(dist/10)*10 + " px", cx, cy + 26);
+    }
+  }
+
+  // ---- HUD (screen space) ----
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (state.phase === "fly" || state.phase === "end"){
+    // score + deliveries
+    ctx.textAlign = "left"; ctx.font = "700 20px ui-monospace,monospace";
+    ctx.fillStyle = "var"; ctx.fillStyle = "#e8ecf4";
+    ctx.fillText("SCORE " + Math.round(state.score), 20, 34);
+    // delivery pips: N shown visibly
+    ctx.font = "600 13px ui-monospace,monospace";
+    ctx.fillStyle = "#8b94a7";
+    ctx.fillText("DELIVERIES  " + state.drops + " / " + DROPS_TO_WIN, 20, 58);
+    for (let i = 0; i < DROPS_TO_WIN; i++){
+      ctx.beginPath(); ctx.arc(24 + i*24, 76, 7, 0, Math.PI*2);
+      if (i < state.drops){ ctx.fillStyle = "#6ee7a8"; ctx.fill(); }
+      else { ctx.strokeStyle = "#3a4358"; ctx.lineWidth = 1.5; ctx.stroke(); }
+    }
+    // mission banner
+    const tgt = state.mission.phase === "pickup" ? state.mission.from : state.mission.to;
+    ctx.textAlign = "center";
+    ctx.font = "700 15px ui-monospace,monospace";
+    ctx.fillStyle = state.mission.phase === "pickup" ? "#ffcf5c" : "#6ee7a8";
+    const label = state.mission.phase === "pickup"
+      ? "PICK UP PACKAGE at " + tgt.name
+      : (state.carrying ? "DELIVER PACKAGE to " + tgt.name : "DELIVER PACKAGE to " + tgt.name);
+    ctx.fillText(label, W/2, 34);
+    ctx.font = "500 12px ui-monospace,monospace"; ctx.fillStyle = "#8b94a7";
+    ctx.fillText(state.mission.phase === "pickup"
+      ? "fly inside the amber ring" : "fly inside the green ring", W/2, 52);
+
+    // fuel gauge (top right)
+    const fw = Math.min(230, W*.35), fx = W - fw - 20, fy = 20;
+    ctx.textAlign = "right"; ctx.font = "600 12px ui-monospace,monospace";
+    ctx.fillStyle = "#8b94a7"; ctx.fillText("FUEL", W - 20, fy + 12);
+    ctx.fillStyle = "rgba(255,255,255,.08)";
+    ctx.beginPath(); ctx.roundRect(fx, fy + 20, fw, 14, 7); ctx.fill();
+    const fr = Math.max(0, state.fuel / FUEL_MAX);
+    const low = fr < .25;
+    ctx.fillStyle = low ? (Math.sin(now*.01) > 0 ? "#ff5c6a" : "#8a2e38") : (fr < .5 ? "#ffcf5c" : "#6ee7a8");
+    if (fr > 0){ ctx.beginPath(); ctx.roundRect(fx, fy + 20, Math.max(6, fw*fr), 14, 7); ctx.fill(); }
+    ctx.fillStyle = "#e8ecf4"; ctx.font = "600 11px ui-monospace,monospace";
+    ctx.fillText(Math.ceil(state.fuel) + "%", fx + fw/2, fy + 31);
+
+    // strand warning
+    if (state.fuel <= 0 && state.phase === "fly"){
+      ctx.textAlign = "center"; ctx.font = "700 15px ui-monospace,monospace";
+      ctx.fillStyle = Math.sin(now*.012) > 0 ? "#ff5c6a" : "#7a2029";
+      const left = Math.max(0, Math.ceil(STRAND_S - state.strand));
+      ctx.fillText("OUT OF FUEL — find a canister or drift to one!  Adrift: " + left + "s", W/2, H - 26);
+    } else if (state.fuel < 25 && state.phase === "fly"){
+      ctx.textAlign = "center"; ctx.font = "600 12px ui-monospace,monospace";
+      ctx.fillStyle = "#ffcf5c";
+      ctx.fillText("LOW FUEL — coast on gravity, grab canisters", W/2, H - 26);
+    }
+
+    // tiny controls reminder
+    ctx.textAlign = "left"; ctx.font = "500 11px ui-monospace,monospace";
+    ctx.fillStyle = "rgba(139,148,167,.7)";
+    ctx.fillText("W/↑ thrust · A/D rotate · S retro · hold mouse/touch to steer+thrust · R restart", 20, H - 14);
+  }
+
+  // flash
+  if (state.flash > 0){
+    ctx.fillStyle = "rgba(255,255,255," + (state.flash*.5).toFixed(2) + ")";
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+/* ---------------- main loop ---------------- */
+let last = performance.now(), acc = 0;
+function frame(now){
+  requestAnimationFrame(frame);
+  let elapsed = (now - last) / 1000; last = now;
+  if (elapsed > .25) elapsed = .25;           // clamp long tab stalls
+  if (state.phase === "fly"){
+    acc += elapsed;
+    let steps = 0;
+    while (acc >= DT && steps < MAX_STEPS){ physicsStep(DT); acc -= DT; steps++; if (state.phase !== "fly") break; }
+    if (steps === MAX_STEPS) acc = 0;          // shed backlog
+  } else {
+    updateBodies(elapsed);                     // keep world alive on menus
+    for (let i = state.particles.length - 1; i >= 0; i--){
+      const p = state.particles[i]; p.t += elapsed;
+      if (p.t > p.life){ state.particles.splice(i, 1); continue; }
+      p.x += p.vx * elapsed; p.y += p.vy * elapsed;
+    }
+  }
+  // camera follow with velocity lead
+  const s = state.ship;
+  const lead = .35;
+  const tx = s.x + s.vx * lead, ty = s.y + s.vy * lead;
+  const spd = Math.hypot(s.vx, s.vy);
+  const zt = baseZoom() * Math.max(.55, 1.02 - spd * .0007);
+  cam.zoom += (zt - cam.zoom) * .04;
+  cam.x += (tx - cam.x) * .06; cam.y += (ty - cam.y) * .06;
+  render(now);
+}
+reset();
+requestAnimationFrame(frame);
+
+/* minimal debug/verification hook (also lets automated tests drive the sim) */
+window.__game = { state, reset, startGame, restart, physicsStep, updateBodies, endGame, newMission, DT, planets, allMoons, FUEL_MAX };
+</script>
+</body>
+</html>

@@ -1,0 +1,1395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#e9f4f4" />
+<title>Water balloons — a soft-body playground</title>
+<style>
+  :root{
+    --ink:#06333c;
+    --ink-2:#41727b;
+    --line:#06333c;
+    --paper:#e9f4f4;
+    --pad: clamp(16px, 3.2vw, 38px);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;overflow:hidden;background:var(--paper)}
+  body{
+    font-family:"Avenir Next","Segoe UI Variable Text","Segoe UI",ui-rounded,"SF Pro Rounded",system-ui,-apple-system,sans-serif;
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    -webkit-tap-highlight-color:transparent;
+    overscroll-behavior:none;
+    user-select:none;
+  }
+  canvas{position:fixed;inset:0;display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+  canvas.grabbing{cursor:grabbing}
+
+  .ui{position:fixed;inset:0;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;
+      padding:calc(var(--pad) + env(safe-area-inset-top)) var(--pad) calc(var(--pad) + env(safe-area-inset-bottom)) var(--pad)}
+
+  header{max-width:min(46ch, 60vw)}
+  h1{
+    margin:0;
+    font-size:clamp(26px, 3.6vw, 44px);
+    line-height:0.98;
+    font-weight:800;
+    letter-spacing:-0.035em;
+    text-wrap:balance;
+  }
+  h1 .ball{color:#0f9fb4}
+  .hint{
+    margin:10px 0 0;
+    font-size:clamp(12.5px, 1.05vw, 15px);
+    line-height:1.45;
+    color:var(--ink-2);
+    max-width:34ch;
+    font-weight:450;
+    letter-spacing:0.002em;
+  }
+  .hint kbd{
+    font:inherit;font-weight:600;color:var(--ink);
+    background:rgba(6,51,60,.07);border-radius:5px;padding:1px 5px;margin:0 -1px;
+  }
+
+  .dock{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .count{
+    font-size:13px;color:var(--ink-2);font-weight:550;
+    display:flex;align-items:center;gap:8px;letter-spacing:.01em;
+    min-height:44px;
+  }
+  .count b{color:var(--ink);font-variant-numeric:tabular-nums;font-weight:800;font-size:15px}
+  .count .dot{width:7px;height:7px;border-radius:50%;background:#0f9fb4;opacity:.55;transition:transform .2s}
+  .count.tick .dot{transform:scale(2.6);opacity:.9}
+
+  .buttons{display:flex;gap:8px;pointer-events:auto}
+  button{
+    -webkit-appearance:none;appearance:none;
+    font:inherit;font-weight:650;font-size:13.5px;letter-spacing:.005em;
+    border-radius:12px;padding:0 16px;height:44px;min-width:44px;
+    border:1px solid rgba(6,51,60,.22);
+    background:rgba(255,255,255,.55);
+    color:var(--ink);
+    cursor:pointer;
+    transition:background .16s, border-color .16s, transform .12s, color .16s;
+    -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+    display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  }
+  button:hover{background:rgba(255,255,255,.9);border-color:rgba(6,51,60,.38)}
+  button:active{transform:translateY(1px) scale(.985)}
+  button:focus-visible{outline:2px solid #0f9fb4;outline-offset:3px}
+  button.primary{background:var(--ink);border-color:var(--ink);color:#eaf7f8}
+  button.primary:hover{background:#0b4a56;border-color:#0b4a56}
+  button svg{width:15px;height:15px;display:block}
+
+  @media (max-width:620px){
+    header{max-width:78vw}
+    .hint{font-size:12.5px;max-width:29ch}
+    .dock{width:100%}
+    .count{order:2}
+    .buttons{order:1;width:100%;justify-content:flex-end}
+    button{flex:0 0 auto}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .count .dot{transition:none}
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" aria-label="Playground of soft-body water balloons. Drag a balloon to stretch and throw it; pull hard to make it burst."></canvas>
+
+<div class="ui">
+  <header>
+    <h1>Water <span class="ball">balloons</span></h1>
+    <p class="hint">Grab one, stretch it, fling it. Pull it too far and it bursts. <kbd>R</kbd> resets the deck.</p>
+  </header>
+  <div class="dock">
+    <div class="count" id="count" aria-live="polite"><span class="dot"></span><b id="pops">0</b> popped</div>
+    <div class="buttons">
+      <button id="sound" type="button" aria-pressed="true" aria-label="Mute sound">
+        <svg id="sndIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.2L12 5.5v13L7.2 14.5H4z"/><path d="M16.2 8.6a5 5 0 0 1 0 6.8"/><path d="M18.9 6a9 9 0 0 1 0 12"/></svg>
+        <span id="sndLabel">Sound</span>
+      </button>
+      <button id="reset" type="button" class="primary" aria-label="Reset all balloons">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4.6h-4.6"/></svg>
+        Reset
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ------------------------------------------------------------------ *
+ *  Water balloons — soft bodies with pressure, drag, splash and pop.
+ *  Everything (art, motion, sound) is generated in code.
+ * ------------------------------------------------------------------ */
+
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp  = (a, b, t) => a + (b - a) * t;
+const rnd   = (a, b) => a + Math.random() * (b - a);
+const rndi  = (a, b) => Math.floor(rnd(a, b + 1));
+const now   = () => performance.now();
+
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { alpha: false });
+const popsEl = document.getElementById('pops');
+const countEl = document.getElementById('count');
+const resetBtn = document.getElementById('reset');
+const soundBtn = document.getElementById('sound');
+const sndLabel = document.getElementById('sndLabel');
+const sndIcon = document.getElementById('sndIcon');
+
+/* ----------------------------- tunables ---------------------------- */
+const CFG = {
+  DT: 1 / 120,            // fixed physics step (s)
+  MAX_STEPS: 3,
+  G: 2600,                // px / s^2
+  DAMP: 0.9987,           // velocity retention per step
+  EDGE_ITERS: 2,
+  EDGE_STIFF: 0.34,
+  PRESS: 15000,           // pressure stiffness (px/s^2 per unit area ratio)
+  SHAPE_K: 0.028,         // incompressible shape memory (per step)
+  SELF_REP: 0.30,
+  GRAB_FOLLOW: 2.6,       // how fast the sloshing mass chases the hand (per s)
+  GRAB_REACH: 2.35,       // the skin can be drawn out to this many radii
+  BOUNCE: 0.30,
+  FRICTION: 0.88,
+  POP_STRAIN: 5.00,     // runaway guard only
+  POP_SPREAD: 1.56,     // radius growth while grabbed
+  POP_IMPACT: 1150,     // a thrown balloon splats on the deck
+  POP_WALL: 1500,       // ...or smacks the side wall
+  MAX_DROPS: 760,
+  popEnabled: true,
+};
+
+/* ------------------------------ layout ----------------------------- */
+let W = 0, H = 0, DPR = 1, floorY = 0, deckH = 0, R = 60;
+let vignette = null, grain = null, specSprite = null, mistSprite = null;
+const hueSprites = new Map();
+
+function hsla(h, s, l, a) { return 'hsla(' + h + ',' + s + '%,' + l + '%,' + a + ')'; }
+
+/* ============================== SFX =============================== */
+const Sfx = {
+  ac: null, master: null, noiseBuf: null, on: true, ready: false,
+  init() {
+    if (this.ac) { if (this.ac.state === 'suspended') this.ac.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    this.ac = new AC();
+    this.master = this.ac.createGain();
+    this.master.gain.value = this.on ? 0.5 : 0;
+    this.master.connect(this.ac.destination);
+    const len = Math.floor(this.ac.sampleRate * 1.2);
+    const buf = this.ac.createBuffer(1, len, this.ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    this.noiseBuf = buf;
+    this.ready = true;
+  },
+  setOn(v) {
+    this.on = v;
+    if (this.master) this.master.gain.setTargetAtTime(v ? 0.5 : 0, this.ac.currentTime, 0.02);
+  },
+  env(g, t0, peak, attack, decay) {
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), t0 + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + decay);
+  },
+  noise(t0, dur, type, f0, f1, q, peak) {
+    const s = this.ac.createBufferSource(); s.buffer = this.noiseBuf;
+    const bp = this.ac.createBiquadFilter(); bp.type = type; bp.Q.value = q;
+    bp.frequency.setValueAtTime(f0, t0);
+    bp.frequency.exponentialRampToValueAtTime(Math.max(f1, 40), t0 + dur);
+    const g = this.ac.createGain(); this.env(g, t0, peak, 0.004, dur);
+    s.connect(bp); bp.connect(g); g.connect(this.master);
+    s.start(t0); s.stop(t0 + dur + 0.05);
+  },
+  tone(t0, dur, f0, f1, type, peak) {
+    const o = this.ac.createOscillator(); o.type = type;
+    o.frequency.setValueAtTime(f0, t0);
+    o.frequency.exponentialRampToValueAtTime(Math.max(f1, 20), t0 + dur);
+    const g = this.ac.createGain(); this.env(g, t0, peak, 0.006, dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  },
+  pop() {
+    if (!this.ready || !this.on) return;
+    const t = this.ac.currentTime;
+    this.noise(t, 0.13, 'bandpass', 2400, 420, 1.1, 0.9);
+    this.noise(t, 0.05, 'highpass', 5200, 2600, 0.7, 0.5);
+    this.tone(t, 0.16, 260, 70, 'sine', 0.55);
+    this.noise(t + 0.02, 0.42, 'lowpass', 2200, 380, 0.8, 0.28);
+  },
+  splash(intensity) {
+    if (!this.ready || !this.on) return;
+    const t = this.ac.currentTime, k = clamp(intensity, 0.2, 1);
+    this.noise(t, 0.30, 'lowpass', 2600 * k + 700, 420, 0.9, 0.20 * k + 0.05);
+  },
+  thud(v) {
+    if (!this.ready || !this.on) return;
+    const t = this.ac.currentTime, k = clamp(v / 1400, 0.08, 1);
+    this.tone(t, 0.13, 120, 52, 'sine', 0.16 * k);
+    this.noise(t, 0.09, 'lowpass', 900, 220, 0.6, 0.09 * k);
+  },
+  squish() {
+    if (!this.ready || !this.on) return;
+    const t = this.ac.currentTime;
+    this.tone(t, 0.10, 210, 120, 'sine', 0.10);
+    this.noise(t, 0.08, 'bandpass', 700, 380, 1.4, 0.05);
+  },
+};
+
+/* ============================ sprites ============================= */
+function makeSprite(size, stops) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  for (const [o, col] of stops) grad.addColorStop(o, col);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  return c;
+}
+
+function buildSprites() {
+  specSprite = makeSprite(128, [
+    [0, 'rgba(255,255,255,0.95)'],
+    [0.35, 'rgba(255,255,255,0.55)'],
+    [0.7, 'rgba(255,255,255,0.12)'],
+    [1, 'rgba(255,255,255,0)'],
+  ]);
+  mistSprite = makeSprite(128, [
+    [0, 'rgba(255,255,255,0.55)'],
+    [0.45, 'rgba(255,255,255,0.22)'],
+    [1, 'rgba(255,255,255,0)'],
+  ]);
+  hueSprites.clear();
+  for (const h of HUES) {
+    hueSprites.set(h.h, makeSprite(64, [
+      [0, hsla(h.h, 100, 92, 0.95)],
+      [0.30, hsla(h.h, 95, 68, 0.92)],
+      [0.72, hsla(h.h, 92, 50, 0.85)],
+      [1, hsla(h.h, 88, 40, 0.0)],
+    ]));
+  }
+}
+
+function buildGrain() {
+  const s = 96;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d');
+  const img = g.createImageData(s, s);
+  for (let i = 0; i < s * s; i++) {
+    const v = 128 + (Math.random() - 0.5) * 255;
+    img.data[i * 4] = v; img.data[i * 4 + 1] = v; img.data[i * 4 + 2] = v;
+    img.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  grain = ctx.createPattern(c, 'repeat');
+}
+
+function buildVignette() {
+  vignette = ctx.createRadialGradient(W * 0.42, H * 0.34, Math.min(W, H) * 0.22,
+                                      W * 0.5, H * 0.5, Math.max(W, H) * 0.78);
+  vignette.addColorStop(0, 'rgba(255,255,255,0.16)');
+  vignette.addColorStop(0.55, 'rgba(255,255,255,0)');
+  vignette.addColorStop(1, 'rgba(4,46,56,0.16)');
+}
+
+/* ============================== world ============================= */
+const HUES = [
+  { h: 6,   s: 90, l: 58 },   // coral
+  { h: 32,  s: 96, l: 55 },   // tangerine
+  { h: 186, s: 88, l: 48 },   // aqua
+  { h: 158, s: 74, l: 45 },   // jade
+  { h: 258, s: 78, l: 62 },   // violet
+  { h: 46,  s: 96, l: 55 },   // lemon
+];
+
+const world = {
+  balloons: [],
+  drops: [],
+  rings: [],
+  shocks: [],
+  mists: [],
+  wet: [],
+  pops: 0,
+  t: 0,
+  respawn: [],
+};
+
+/* ----------------------------- balloon ---------------------------- */
+function makeBalloon(cx, cy, r, hue, warm) {
+  const n = clamp(Math.round(r * 0.42), 18, 30);
+  const pts = [], rest = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TAU;
+    const rr = r * (1 + (Math.random() - 0.5) * 0.012);
+    const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+    pts.push({ x, y, px: x, py: y, ax: 0, ay: 0 });
+    rest.push({ x: Math.cos(a) * r, y: Math.sin(a) * r });
+  }
+  const restLen = (TAU * r) / n;
+  const A0 = 0.5 * n * r * r * Math.sin(TAU / n);
+  const b = {
+    pts, rest, n, restLen, A0, r0: r, hue,
+    alive: true, strain: 1, spread: 1, tension: 0, tear: 0, tearT: 0, area: 1, age: 0, thrown: 0,
+    cvx: 0, cvy: 0, pcx: cx, pcy: cy, impactFloor: 0, impactWall: 0, hold: 0,
+    grabs: [], flash: 0, fade: warm ? 0.18 : 0.3,
+    seed: Math.random() * 100, delay: 0,
+    vx: 0, vy: 0, cx, cy, impact: 0,
+    w: r * 2, h: r * 2, minx: cx - r, maxx: cx + r, miny: cy - r, maxy: cy + r,
+  };
+  measure(b);
+  return b;
+}
+
+function layoutBalloons(fresh) {
+  world.balloons.length = 0;
+  world.drops.length = 0;
+  world.rings.length = 0;
+  world.shocks.length = 0;
+  world.mists.length = 0;
+  world.wet.length = 0;
+  world.respawn.length = 0;
+
+  const target = W < 620 ? 4 : W > 1560 ? 8 : 7;
+  const margin = R * 0.85;
+  const usableW = Math.max(R * 2, W - margin * 2);
+  const gap = usableW / target;
+  const hueOff = fresh ? rndi(0, 5) : 0;
+  for (let k = 0; k < target; k++) {
+    const r = R * rnd(0.93, 1.02);
+    const x = clamp(margin + gap * (k + 0.5) + rnd(-gap * 0.09, gap * 0.09), r + 8, W - r - 8);
+    const drop = 24 + k * 11 + rnd(0, 22);      // staggered plop onto the deck
+    const b = makeBalloon(x, floorY - r - drop, r, HUES[(k + hueOff) % HUES.length].h, false);
+    b.delay = k * 0.085;
+    world.balloons.push(b);
+  }
+}
+
+function respawnBalloon(hue, x) {
+  const r = R * rnd(0.9, 1.05);
+  const px = clamp(x === undefined ? rnd(r + 10, W - r - 10) : x, r + 10, W - r - 10);
+  const b = makeBalloon(px, -r - 30, r, hue, true);
+  b.fade = 0.3;
+  world.balloons.push(b);
+  return b;
+}
+
+/* ============================= physics ============================ */
+function signedArea(p) {
+  let a = 0;
+  for (let i = 0, n = p.length; i < n; i++) {
+    const q = p[i], w = p[(i + 1) % n];
+    a += q.x * w.y - w.x * q.y;
+  }
+  return a * 0.5;
+}
+
+function stepBalloon(b, dt) {
+  const p = b.pts, n = b.n, rl = b.restLen;
+  // ---- area & pressure forces -------------------------------------
+  const A = Math.abs(signedArea(p)) + 1e-4;
+  b.area = A / b.A0;
+  const ratio = clamp(b.A0 / A, 0.4, 2.2);
+  const press = CFG.PRESS * (ratio - 1);
+
+  for (let i = 0; i < n; i++) {
+    const q = p[i], w = p[(i + 1) % n];
+    let dx = w.x - q.x, dy = w.y - q.y;
+    const len = Math.hypot(dx, dy) || 1e-4;
+    const nx = dy / len, ny = -dx / len;       // outward normal
+    const f = press * (len / rl) * 0.5;
+    q.ax += nx * f; q.ay += ny * f;
+    w.ax += nx * f; w.ay += ny * f;
+  }
+
+  // ---- integrate (verlet) -----------------------------------------
+  const dt2 = dt * dt;
+  const g = b.delay > 0 ? 0 : CFG.G;
+  for (let i = 0; i < n; i++) {
+    const q = p[i];
+    const vx = (q.x - q.px) * CFG.DAMP;
+    const vy = (q.y - q.py) * CFG.DAMP;
+    q.px = q.x; q.py = q.y;
+    q.x += vx + q.ax * dt2;
+    q.y += vy + (q.ay + g) * dt2;
+    q.ax = 0; q.ay = 0;
+  }
+
+  // ---- skin + self contacts ---------------------------------------
+  for (let it = 0; it < CFG.EDGE_ITERS; it++) {
+    const k = CFG.EDGE_STIFF;
+    for (let i = 0; i < n; i++) {
+      const q = p[i], w = p[(i + 1) % n];
+      const dx = w.x - q.x, dy = w.y - q.y;
+      const d = Math.hypot(dx, dy) || 1e-4;
+      const diff = ((d - rl) / d) * 0.5 * k;
+      const ox = dx * diff, oy = dy * diff;
+      q.x += ox; q.y += oy;
+      w.x -= ox; w.y -= oy;
+    }
+    // keep opposite sides from passing through each other
+    const rep = rl * 0.72;
+    for (let i = 0; i < n; i++) {
+      const q = p[i];
+      for (let j = i + 4; j < n; j++) {
+        if (i === 0 && j === n - 1) continue;
+        const w = p[j];
+        const dx = w.x - q.x, dy = w.y - q.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > rep * rep || d2 < 1e-6) continue;
+        const d = Math.sqrt(d2);
+        const push = ((rep - d) / d) * 0.5 * CFG.SELF_REP;
+        q.x -= dx * push; q.y -= dy * push;
+        w.x += dx * push; w.y += dy * push;
+      }
+    }
+  }
+
+  // ---- shape memory: water is incompressible, the skin remembers
+  //      its round form (best-fit rotation, fixed radius) ------------
+  shapeMatch(b, CFG.SHAPE_K);
+
+  // ---- grab: the water inside lags behind the hand, so the skin is
+  //      drawn out into a neck instead of the balloon rigidly sliding
+  if (b.grabs.length) {
+    let hx = 0, hy = 0;
+    for (const g of b.grabs) { hx += g.tx; hy += g.ty; }
+    hx /= b.grabs.length; hy /= b.grabs.length;
+    if (!b.lag) b.lag = { x: b.cx, y: b.cy };
+    const a = 1 - Math.exp(-CFG.GRAB_FOLLOW * dt);
+    b.lag.x += (hx - b.lag.x) * a;
+    b.lag.y += (hy - b.lag.y) * a;
+    translate(b, (b.lag.x - b.cx) * 0.45, (b.lag.y - b.cy) * 0.45);
+
+    for (const g of b.grabs) {
+      // the hand can only draw the skin out so far
+      const dx = g.tx - g.hx, dy = g.ty - g.hy;
+      const len = Math.hypot(dx, dy) || 1e-6;
+      const maxLen = b.r0 * CFG.GRAB_REACH;
+      const sc = len > maxLen ? maxLen / len : 1;
+      const hx2 = g.hx + dx * sc, hy2 = g.hy + dy * sc;
+      g.pull = len / b.r0;
+      for (let i = 0; i < g.idx.length; i++) {
+        const q = p[g.idx[i]];
+        const tx = hx2 + g.ox[i] * sc, ty = hy2 + g.oy[i] * sc;
+        q.x += (tx - q.x) * g.k[i];
+        q.y += (ty - q.y) * g.k[i];
+      }
+    }
+  } else if (b.lag) {
+    b.lag = null;
+  }
+}
+
+function shapeMatch(b, k) {
+  const p = b.pts, rest = b.rest, n = b.n;
+  let cx = 0, cy = 0;
+  for (let i = 0; i < n; i++) { cx += p[i].x; cy += p[i].y; }
+  cx /= n; cy /= n;
+  let dot = 0, cross = 0, norm = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = p[i].x - cx, dy = p[i].y - cy;
+    const rx = rest[i].x, ry = rest[i].y;
+    dot += dx * rx + dy * ry;
+    cross += dx * ry - dy * rx;
+    norm += rx * rx + ry * ry;
+  }
+  b.cx = cx; b.cy = cy;
+  const ang = Math.atan2(cross, dot);
+  const c = Math.cos(ang), s = Math.sin(ang);
+  for (let i = 0; i < n; i++) {
+    const rx = rest[i].x, ry = rest[i].y;
+    const tx = cx + rx * c - ry * s;
+    const ty = cy + rx * s + ry * c;
+    p[i].x += (tx - p[i].x) * k;
+    p[i].y += (ty - p[i].y) * k;
+  }
+}
+
+function collideBalloons() {
+  const bs = world.balloons;
+  for (let a = 0; a < bs.length; a++) {
+    const A = bs[a];
+    for (let c = a + 1; c < bs.length; c++) {
+      const B = bs[c];
+      let dx = B.cx - A.cx, dy = B.cy - A.cy;
+      let d = Math.hypot(dx, dy);
+      const reach = A.r0 + B.r0;
+      if (d > reach + 6) continue;
+
+      // --- bulk separation (balloons must not nest inside each other)
+      const minD = reach * 0.90;
+      if (d < minD) {
+        let nx, ny;
+        if (d < 1e-3) { nx = 1; ny = 0; d = 1e-3; }
+        else { nx = dx / d; ny = dy / d; }
+        const ov = (minD - d) * 0.34;
+        const push = Math.min(ov, 14);
+        translate(A, -nx * push * 0.5, -ny * push * 0.5);
+        translate(B, nx * push * 0.5, ny * push * 0.5);
+      }
+
+      // --- local contacts: flatten where they touch
+      if (Math.abs(A.cx - B.cx) > reach + 8 || Math.abs(A.cy - B.cy) > reach + 8) continue;
+      const rad = (A.restLen + B.restLen) * 0.5;
+      for (let i = 0; i < A.n; i++) {
+        const p = A.pts[i];
+        for (let j = 0; j < B.n; j++) {
+          const q = B.pts[j];
+          const ex = q.x - p.x, ey = q.y - p.y;
+          const d2 = ex * ex + ey * ey;
+          if (d2 > rad * rad || d2 < 1e-6) continue;
+          const dd = Math.sqrt(d2);
+          const push = Math.min(((rad - dd) / dd) * 0.5 * 0.5, 2.2 / dd);
+          p.x -= ex * push; p.y -= ey * push;
+          q.x += ex * push; q.y += ey * push;
+        }
+      }
+    }
+  }
+}
+
+function translate(b, ox, oy) {
+  for (const q of b.pts) { q.x += ox; q.y += oy; }
+  b.cx += ox; b.cy += oy;
+}
+
+function walls(b, dt) {
+  const p = b.pts;
+  const inv = 1 / dt;                       // per-step displacement -> px/s
+  for (let i = 0; i < b.n; i++) {
+    const q = p[i];
+    const vx = q.x - q.px, vy = q.y - q.py;
+    if (q.y > floorY) {
+      const sp = vy * inv;                  // speed the skin arrived with (y grows down)
+      if (sp > b.impact) b.impact = sp;
+      if (sp > b.impactFloor) b.impactFloor = sp;
+      q.y = floorY;
+      q.py = q.y + vy * CFG.BOUNCE;
+      q.px = q.x - vx * CFG.FRICTION;
+    } else if (q.y < -H * 1.2) {
+      q.y = -H * 1.2;
+      q.py = q.y - vy;
+    }
+    if (q.x < 4) {
+      const sp = -vx * inv;
+      if (sp > b.impact) b.impact = sp;
+      if (sp > b.impactWall) b.impactWall = sp;
+      q.x = 4; q.px = q.x + vx * CFG.BOUNCE; q.py = q.y - vy * CFG.FRICTION;
+    } else if (q.x > W - 4) {
+      const sp = vx * inv;
+      if (sp > b.impact) b.impact = sp;
+      if (sp > b.impactWall) b.impactWall = sp;
+      q.x = W - 4; q.px = q.x + vx * CFG.BOUNCE; q.py = q.y - vy * CFG.FRICTION;
+    }
+  }
+}
+
+function measure(b) {
+  let cx = 0, cy = 0, minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
+  for (const q of b.pts) {
+    cx += q.x; cy += q.y;
+    if (q.x < minx) minx = q.x; if (q.x > maxx) maxx = q.x;
+    if (q.y < miny) miny = q.y; if (q.y > maxy) maxy = q.y;
+  }
+  b.cx = cx / b.n; b.cy = cy / b.n;
+  b.minx = minx; b.maxx = maxx; b.miny = miny; b.maxy = maxy;
+  b.w = maxx - minx; b.h = maxy - miny;
+}
+
+function physics(dt) {
+  const bs = world.balloons;
+  for (let i = 0; i < bs.length; i++) {
+    const b = bs[i];
+    b.age += dt;
+    if (b.delay > 0) b.delay -= dt;
+    if (b.fade > 0) b.fade -= dt;
+    b.pcx = b.cx; b.pcy = b.cy;
+    stepBalloon(b, dt);
+  }
+  collideBalloons();
+  const dead = [];
+  for (let i = 0; i < bs.length; i++) {
+    const b = bs[i];
+    walls(b, dt);
+    measure(b);
+    b.cvx = (b.cx - b.pcx) / dt;
+    b.cvy = (b.cy - b.pcy) / dt;
+    const why = shouldPop(b);
+    if (why) { b.why = why; dead.push(b); }
+    b.impact *= 0.62;
+    b.impactFloor *= 0.62;
+    b.impactWall *= 0.62;
+    if (b.thrown > 0) b.thrown -= dt;
+  }
+  for (const b of dead) pop(b);
+}
+
+function shouldPop(b) {
+  const p = b.pts, n = b.n, rl = b.restLen;
+  let maxStrain = 0, spread = 0;
+  for (let i = 0; i < n; i++) {
+    const q = p[i], w = p[(i + 1) % n];
+    const d = Math.hypot(w.x - q.x, w.y - q.y) / rl;
+    if (d > maxStrain) maxStrain = d;
+    const dr = Math.hypot(q.x - b.cx, q.y - b.cy) / b.r0;
+    if (dr > spread) spread = dr;
+  }
+  b.strain = maxStrain;
+  b.spread = spread;
+
+  /* Latex only gives way while it is being worked: pull it wide and hold,
+     or press it flat on the deck and hold. A fast flick is forgiven.     */
+  const grabbed = b.grabs.length > 0;
+  let reach = 0;
+  for (const g of b.grabs) {
+    const d = Math.hypot(g.tx - b.cx, g.ty - b.cy) / b.r0;
+    if (d > reach) reach = d;
+  }
+  b.reach = reach;
+  const stretchN = grabbed ? clamp((reach - 0.72) / 0.95, 0, 1) : 0;
+  const pressed = grabbed && b.maxy > floorY - 6;
+  const squashN = pressed ? clamp((0.88 - b.area) / 0.30, 0, 1) : 0;
+  const strainN = grabbed ? clamp((maxStrain - 1.55) / 1.10, 0, 1) : 0;
+  const load = Math.max(stretchN, squashN * 0.95, strainN * 0.9);
+
+  // accumulate damage only above a small threshold; bleed off quickly when released
+  const dt = CFG.DT;
+  if (load > 0.18) b.tearT += (load * load * 1.45 - 0.42) * dt;
+  else b.tearT -= dt * 1.35;
+  b.tearT = clamp(b.tearT, 0, 1.4);
+
+  b.tear = clamp(b.tearT / 0.78, 0, 1);                 // visible strain warning
+  b.tension = clamp(Math.max(b.tear, load * 0.55), 0, 1);
+  b.hold = b.tear;
+
+  if (!CFG.popEnabled) return false;
+  if (b.age < 1.1) return false;                        // settle grace
+  if (b.thrown > 0 && b.impactFloor > CFG.POP_IMPACT) return { why: 'splat', strain: maxStrain, spread, impact: b.impactFloor };
+  if (b.impactFloor > CFG.POP_IMPACT * 2.1) return { why: 'splat', strain: maxStrain, spread, impact: b.impactFloor };
+  if (b.thrown > 0 && b.impactWall > CFG.POP_WALL) return { why: 'smack', strain: maxStrain, spread, impact: b.impactWall };
+  if (b.impactWall > CFG.POP_WALL * 1.75) return { why: 'smack', strain: maxStrain, spread, impact: b.impactWall };
+  if (b.tearT > 0.78) return { why: squashN > stretchN ? 'crush' : 'stretch', strain: maxStrain, spread, load };
+  return false;
+}
+
+/* ============================== effects =========================== */
+function addDrop(x, y, vx, vy, hue, r, life) {
+  if (world.drops.length >= CFG.MAX_DROPS) {
+    const old = world.drops.shift();
+    if (!old) return;
+  }
+  world.drops.push({ x, y, px: x, py: y, vx, vy, hue, r, life: life || rnd(0.7, 1.6), max: life || 1.4 });
+}
+
+function pop(b) {
+  if (!b.alive) return;
+  b.alive = false;
+  const idx = world.balloons.indexOf(b);
+  if (idx >= 0) world.balloons.splice(idx, 1);
+  world.pops++;
+  popsEl.textContent = world.pops;
+  countEl.classList.add('tick');
+  setTimeout(() => countEl.classList.remove('tick'), 220);
+
+  const hue = b.hue;
+  const cx = b.cx, cy = b.cy;
+  world.lastPop = Object.assign({ hue, n: b.pts.length }, b.why || {});
+  measure(b);
+
+  // droplets from the shell
+  for (let i = 0; i < b.n; i++) {
+    const q = b.pts[i];
+    const nx = (q.x - cx) / (b.r0 || 1), ny = (q.y - cy) / (b.r0 || 1);
+    const sp = rnd(240, 900);
+    const count = rndi(2, 3);
+    for (let k = 0; k < count; k++) {
+      addDrop(
+        q.x + rnd(-4, 4), q.y + rnd(-4, 4),
+        nx * sp * rnd(0.5, 1.2) + rnd(-160, 160),
+        ny * sp * rnd(0.4, 1.0) + rnd(-380, 60),
+        hue, rnd(1.6, 5.2)
+      );
+    }
+  }
+  // fine spray
+  for (let k = 0; k < 26; k++) {
+    const a = rnd(0, TAU), sp = rnd(120, 620);
+    addDrop(cx + Math.cos(a) * b.r0 * 0.5, cy + Math.sin(a) * b.r0 * 0.5,
+      Math.cos(a) * sp, Math.sin(a) * sp - 120, hue, rnd(1, 2.6));
+  }
+  world.shocks.push({ x: cx, y: cy, r: b.r0 * 0.55, max: b.r0 * rnd(2.4, 3.1), life: 0.42, maxLife: 0.42, hue });
+  for (let k = 0; k < 3; k++) {
+    world.mists.push({
+      x: cx + rnd(-b.r0 * 0.5, b.r0 * 0.5), y: cy + rnd(-b.r0 * 0.5, b.r0 * 0.5),
+      r: b.r0 * rnd(0.5, 0.95), life: 0.5, maxLife: 0.5, hue,
+    });
+  }
+  if (cy > floorY - b.r0 * 1.6) {
+    world.wet.push({ x: cx, y: floorY + rnd(2, 16), r: b.r0 * rnd(0.8, 1.25), life: 7, maxLife: 7 });
+    for (let k = 0; k < 3; k++) {
+      world.rings.push({ x: cx + rnd(-b.r0, b.r0) * 0.6, y: floorY + rnd(2, 18), r: 4, max: rnd(b.r0 * 0.8, b.r0 * 1.7), life: 0.75, maxLife: 0.75 });
+    }
+  }
+  Sfx.pop();
+  Sfx.splash(b.r0 / 70);
+  scheduleRespawn(hue, cx);
+}
+
+function scheduleRespawn(hue, x) {
+  world.respawn.push({ at: world.t + rnd(0.7, 1.3), hue, x });
+}
+
+/* --------------------------- simulation --------------------------- */
+function updateEffects(dt) {
+  // droplets
+  const ds = world.drops;
+  for (let i = ds.length - 1; i >= 0; i--) {
+    const d = ds[i];
+    d.px = d.x; d.py = d.y;
+    d.vy += CFG.G * 0.62 * dt;
+    d.vx *= 1 - 0.9 * dt;
+    d.x += d.vx * dt; d.y += d.vy * dt;
+    d.life -= dt;
+    if (d.y > floorY + 1) {
+      if (Math.abs(d.vy) > 90 && world.rings.length < 48 && Math.random() < 0.35) {
+        world.rings.push({ x: d.x, y: floorY + rnd(0, 10), r: 2, max: rnd(6, 20), life: 0.5, maxLife: 0.5 });
+      }
+      d.life -= dt * 2;
+      d.y = floorY + 1; d.vy *= -0.18; d.vx *= 0.55;
+      if (Math.abs(d.vy) < 30) d.life -= dt * 6;
+    }
+    if (d.x < 0 || d.x > W) { d.vx *= -0.4; d.x = clamp(d.x, 1, W - 1); }
+    if (d.life <= 0) ds.splice(i, 1);
+  }
+  for (let i = world.rings.length - 1; i >= 0; i--) {
+    const r = world.rings[i]; r.life -= dt;
+    r.r += (r.max - r.r) * Math.min(1, dt * 7);
+    if (r.life <= 0) world.rings.splice(i, 1);
+  }
+  for (let i = world.shocks.length - 1; i >= 0; i--) {
+    const s = world.shocks[i]; s.life -= dt;
+    s.r += (s.max - s.r) * Math.min(1, dt * 9);
+    if (s.life <= 0) world.shocks.splice(i, 1);
+  }
+  for (let i = world.mists.length - 1; i >= 0; i--) {
+    const m = world.mists[i]; m.life -= dt; m.r += dt * 90;
+    if (m.life <= 0) world.mists.splice(i, 1);
+  }
+  for (let i = world.wet.length - 1; i >= 0; i--) {
+    const w = world.wet[i]; w.life -= dt;
+    if (w.life <= 0) world.wet.splice(i, 1);
+  }
+  // respawn queue
+  for (let i = world.respawn.length - 1; i >= 0; i--) {
+    if (world.t >= world.respawn[i].at) {
+      const r = world.respawn[i];
+      world.respawn.splice(i, 1);
+      if (world.balloons.length < 10) respawnBalloon(r.hue, r.x);
+    }
+  }
+}
+
+/* ============================= rendering ========================== */
+function balloonPath(b) {
+  const p = b.pts, n = b.n;
+  const path = new Path2D();
+  let mx = (p[n - 1].x + p[0].x) * 0.5, my = (p[n - 1].y + p[0].y) * 0.5;
+  path.moveTo(mx, my);
+  for (let i = 0; i < n; i++) {
+    const c = p[i], q = p[(i + 1) % n];
+    path.quadraticCurveTo(c.x, c.y, (c.x + q.x) * 0.5, (c.y + q.y) * 0.5);
+  }
+  path.closePath();
+  return path;
+}
+
+function drawBackground() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#f2fbfa');
+  g.addColorStop(0.42, '#e6f4f4');
+  g.addColorStop(1, '#d3e9ea');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // soft light pools drifting behind the balloons
+  const t = world.t;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = 0.55;
+  const pool = mistSprite;
+  for (let i = 0; i < 3; i++) {
+    const px = W * (0.22 + 0.28 * i) + Math.sin(t * 0.13 + i * 2.1) * W * 0.05;
+    const py = H * (0.18 + 0.12 * i) + Math.cos(t * 0.11 + i) * H * 0.04;
+    const s = Math.max(W, H) * (0.55 + i * 0.12);
+    ctx.globalAlpha = 0.10 - i * 0.02;
+    ctx.drawImage(pool, px - s / 2, py - s / 2, s, s);
+  }
+  ctx.restore();
+}
+
+function drawDeck() {
+  const t = world.t;
+  const top = floorY;
+  // deck face
+  const g = ctx.createLinearGradient(0, top - 8, 0, H);
+  g.addColorStop(0, '#c3e0e2');
+  g.addColorStop(0.35, '#b7d9dc');
+  g.addColorStop(1, '#a3cbcf');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, top, W, H - top);
+
+  // wet gloss band along the horizon
+  const gl = ctx.createLinearGradient(0, top, 0, top + Math.min(80, deckH * 0.6));
+  gl.addColorStop(0, 'rgba(255,255,255,0.55)');
+  gl.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = gl;
+  ctx.fillRect(0, top, W, Math.min(80, deckH * 0.6));
+
+  // tile seams
+  ctx.save();
+  ctx.strokeStyle = 'rgba(6,51,60,0.075)';
+  ctx.lineWidth = 1;
+  const step = 96;
+  for (let x = ((W % step) / 2); x < W; x += step) {
+    ctx.beginPath(); ctx.moveTo(x + 0.5, top); ctx.lineTo(x + 0.5, H); ctx.stroke();
+  }
+  for (let y = top + 34; y < H; y += 62) {
+    ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); ctx.stroke();
+  }
+  ctx.restore();
+
+  // caustics: drifting bright ribbons
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 4; i++) {
+    const x = ((t * (14 + i * 7) + i * 337) % (W + 420)) - 210;
+    const y = top + 26 + i * 26 + Math.sin(t * 0.5 + i) * 6;
+    ctx.globalAlpha = 0.09 + 0.03 * Math.sin(t * 0.7 + i * 1.7);
+    ctx.beginPath();
+    ctx.ellipse(x, y, 150 - i * 18, 9 + i * 2.5, 0, 0, TAU);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // wet patches
+  for (const w of world.wet) {
+    const a = clamp(w.life / w.maxLife, 0, 1);
+    const gg = ctx.createRadialGradient(w.x, w.y, 0, w.x, w.y, w.r * 1.7);
+    gg.addColorStop(0, 'rgba(38,92,104,' + (0.20 * a) + ')');
+    gg.addColorStop(0.7, 'rgba(38,92,104,' + (0.10 * a) + ')');
+    gg.addColorStop(1, 'rgba(38,92,104,0)');
+    ctx.fillStyle = gg;
+    ctx.beginPath();
+    ctx.ellipse(w.x, w.y, w.r * 1.7, w.r * 0.62, 0, 0, TAU);
+    ctx.fill();
+  }
+
+  // ripple rings
+  for (const r of world.rings) {
+    const a = clamp(r.life / r.maxLife, 0, 1);
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.55 * a) + ')';
+    ctx.lineWidth = 1.2 + 1.6 * a;
+    ctx.beginPath();
+    ctx.ellipse(r.x, r.y, r.r, r.r * 0.34, 0, 0, TAU);
+    ctx.stroke();
+  }
+
+  // horizon line
+  ctx.fillStyle = 'rgba(6,51,60,0.16)';
+  ctx.fillRect(0, top - 1, W, 1.2);
+}
+
+function drawShadow(b) {
+  const gap = floorY - b.maxy;
+  if (gap > 210) return;
+  const k = clamp(1 - gap / 210, 0, 1);
+  const w = (b.w || b.r0 * 2) * 0.52 * (0.72 + k * 0.4);
+  const h = w * 0.26;
+  const a = 0.30 * k * k;
+  const g = ctx.createRadialGradient(b.cx, floorY + 4, 0, b.cx, floorY + 4, w);
+  g.addColorStop(0, 'rgba(9,58,68,' + a + ')');
+  g.addColorStop(0.55, 'rgba(9,58,68,' + a * 0.55 + ')');
+  g.addColorStop(1, 'rgba(9,58,68,0)');
+  ctx.fillStyle = g;
+  ctx.save();
+  ctx.translate(b.cx, floorY + 4);
+  ctx.scale(1, 0.28);
+  ctx.beginPath();
+  ctx.arc(0, 0, w, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBalloon(b, path) {
+  const hue = b.hue, r = b.r0;
+  const cx = b.cx, cy = b.cy;
+  const popFlash = b.tension * b.tension;
+
+  // contact shadow handled in a separate pass
+
+  // ---- body -------------------------------------------------------
+  ctx.save();
+  const g = ctx.createRadialGradient(
+    cx - r * 0.36, cy - r * 0.42, r * 0.08,
+    cx + r * 0.06, cy + r * 0.10, r * 1.34
+  );
+  g.addColorStop(0, hsla(hue, 100, 92, 0.26 + popFlash * 0.2));
+  g.addColorStop(0.30, hsla(hue, 96, 76, 0.42 + popFlash * 0.15));
+  g.addColorStop(0.62, hsla(hue, 92, 58, 0.62));
+  g.addColorStop(0.86, hsla(hue, 88, 44, 0.80));
+  g.addColorStop(1, hsla(hue, 84, 34, 0.88));
+  ctx.fillStyle = g;
+  ctx.fill(path);
+
+  // ---- interior light ---------------------------------------------
+  ctx.save();
+  ctx.clip(path);
+
+  // bounce light from the deck, low on the balloon
+  ctx.globalCompositeOperation = 'lighter';
+  const bl = ctx.createRadialGradient(cx + r * 0.06, cy + r * 0.74, 0, cx + r * 0.06, cy + r * 0.74, r * 0.72);
+  bl.addColorStop(0, hsla(hue, 100, 88, 0.42));
+  bl.addColorStop(0.6, hsla(hue, 100, 80, 0.12));
+  bl.addColorStop(1, hsla(hue, 100, 70, 0));
+  ctx.fillStyle = bl;
+  ctx.fillRect(cx - r * 1.6, cy - r * 1.6, r * 3.2, r * 3.2);
+
+  // sloshing inner mass follows the balloon's motion with lag
+  const sway = clamp(b.vx / 900, -1, 1), swayY = clamp(b.vy / 900, -1, 1);
+  const t = world.t + b.seed;
+  for (let i = 0; i < 2; i++) {
+    const ox = Math.sin(t * 1.7 + i * 2.4) * r * 0.1 - sway * r * 0.16;
+    const oy = Math.cos(t * 1.5 + i * 1.9) * r * 0.07 - swayY * r * 0.12;
+    const rr = r * (0.36 + i * 0.1);
+    const sg = ctx.createRadialGradient(cx + ox, cy + oy + r * 0.22, 0, cx + ox, cy + oy + r * 0.22, rr);
+    sg.addColorStop(0, hsla(hue, 100, 96, 0.20 - i * 0.07));
+    sg.addColorStop(1, hsla(hue, 100, 90, 0));
+    ctx.fillStyle = sg;
+    ctx.fillRect(cx - r * 1.6, cy - r * 1.6, r * 3.2, r * 3.2);
+  }
+
+  // primary specular
+  ctx.globalAlpha = 0.55 + popFlash * 0.25;
+  const hx = cx - r * 0.40 + Math.sin(t * 0.9) * r * 0.03;
+  const hy = cy - r * 0.44 + Math.cos(t * 1.1) * r * 0.02;
+  const hw = r * 1.05;
+  ctx.drawImage(specSprite, hx - hw / 2, hy - hw * 0.46, hw, hw * 0.88);
+
+  // crisp little glint
+  ctx.globalAlpha = 0.9;
+  const gx = cx - r * 0.36, gy = cy - r * 0.52;
+  const gr = r * 0.16;
+  const gl = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr);
+  gl.addColorStop(0, 'rgba(255,255,255,0.95)');
+  gl.addColorStop(0.55, 'rgba(255,255,255,0.35)');
+  gl.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = gl;
+  ctx.beginPath();
+  ctx.ellipse(gx, gy, gr * 1.35, gr * 0.72, -0.5, 0, TAU);
+  ctx.fill();
+
+  // thin crescent of light on the lower-right rim
+  ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = hsla(hue, 100, 96, 0.5);
+  ctx.lineWidth = r * 0.055;
+  ctx.beginPath();
+  ctx.ellipse(cx + r * 0.02, cy + r * 0.02, r * 0.86, r * 0.86, 0, 0.22 * Math.PI, 0.78 * Math.PI);
+  ctx.stroke();
+
+  ctx.restore();
+
+  // ---- rim --------------------------------------------------------
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.lineWidth = Math.max(1, r * 0.022);
+  ctx.strokeStyle = hsla(hue, 85, 30, 0.40 + popFlash * 0.25);
+  ctx.stroke(path);
+
+  if (popFlash > 0.02) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineWidth = Math.max(1.5, r * 0.05);
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.35 * popFlash) + ')';
+    ctx.stroke(path);
+  }
+  ctx.restore();
+}
+
+function drawEffects() {
+  // shockwaves
+  for (const s of world.shocks) {
+    const k = clamp(s.life / s.maxLife, 0, 1);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = hsla(s.hue, 90, 70, 0.45 * k);
+    ctx.lineWidth = 2 + 8 * k;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, TAU);
+    ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  // mist
+  for (const m of world.mists) {
+    const k = clamp(m.life / m.maxLife, 0, 1);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.28 * k;
+    ctx.drawImage(mistSprite, m.x - m.r, m.y - m.r, m.r * 2, m.r * 2);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  // droplets
+  for (const d of world.drops) {
+    const k = clamp(d.life / d.max, 0, 1);
+    const sp = Math.hypot(d.vx, d.vy);
+    const spr = hueSprites.get(d.hue);
+    const rr = d.r * (0.7 + 0.5 * k);
+    if (sp > 420) {
+      ctx.strokeStyle = hsla(d.hue, 92, 62, 0.45 * k);
+      ctx.lineWidth = rr * 1.5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(d.px - d.vx * 0.012, d.py - d.vy * 0.012);
+      ctx.lineTo(d.x, d.y);
+      ctx.stroke();
+    }
+    if (spr) {
+      ctx.globalAlpha = 0.95 * Math.min(1, k * 2.2);
+      ctx.drawImage(spr, d.x - rr * 1.5, d.y - rr * 1.5, rr * 3, rr * 3);
+    } else {
+      ctx.fillStyle = hsla(d.hue, 92, 58, 0.9 * k);
+      ctx.beginPath(); ctx.arc(d.x, d.y, rr, 0, TAU); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+function render() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  drawBackground();
+  drawDeck();
+
+  const bs = world.balloons;
+  for (const b of bs) drawShadow(b);
+
+  // back to front
+  const order = bs.slice().sort((a, b) => a.cy - b.cy);
+  for (const b of order) {
+    const path = balloonPath(b);
+    if (b.fade > 0) {
+      ctx.save();
+      ctx.globalAlpha = clamp(1 - b.fade / 0.32, 0, 1);
+      drawBalloon(b, path);
+      ctx.restore();
+      continue;
+    }
+    drawBalloon(b, path);
+  }
+
+  drawEffects();
+
+  // atmosphere
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, W, H);
+  if (grain) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = 0.05;
+    ctx.fillStyle = grain;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+}
+
+/* ============================ interaction ========================= */
+const pointers = new Map();
+
+function localPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+function pointInBalloon(b, x, y) {
+  const p = b.pts, n = b.n;
+  let inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = p[i].x, yi = p[i].y, xj = p[j].x, yj = p[j].y;
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function hitTest(x, y) {
+  let best = null, bestD = 1e9;
+  for (const b of world.balloons) {
+    if (x < b.minx - 6 || x > b.maxx + 6 || y < b.miny - 6 || y > b.maxy + 6) continue;
+    if (!pointInBalloon(b, x, y)) continue;
+    const d = Math.hypot(b.cx - x, b.cy - y);
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best;
+}
+
+function beginGrab(b, x, y, id) {
+  const p = b.pts;
+  const near = [];
+  for (let i = 0; i < b.n; i++) {
+    const d = Math.hypot(p[i].x - x, p[i].y - y);
+    near.push({ i, d });
+  }
+  near.sort((a, b2) => a.d - b2.d);
+  const take = near.slice(0, 7);
+  const idx = take.map(t => t.i);
+  const g = { id, idx, ox: [], oy: [], k: [], tx: x, ty: y, hx: x, hy: y, pull: 0, hist: [] };
+  if (!b.grabs.length) b.lag = { x: b.cx, y: b.cy };
+  for (const t of take) {
+    g.ox.push(p[t.i].x - x);
+    g.oy.push(p[t.i].y - y);
+    g.k.push(clamp(0.75 - t.d / (b.r0 * 3), 0.25, 0.72));
+  }
+  b.grabs.push(g);
+  b.flash = 1;
+  Sfx.squish();
+  return g;
+}
+
+function grabOf(id) {
+  for (const b of world.balloons) {
+    for (const g of b.grabs) if (g.id === id) return { b, g };
+  }
+  return null;
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  Sfx.init();
+  const pt = localPoint(e);
+  const b = hitTest(pt.x, pt.y);
+  if (!b) return;
+  e.preventDefault();
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic pointer */ }
+  canvas.classList.add('grabbing');
+  const g = beginGrab(b, pt.x, pt.y, e.pointerId);
+  pointers.set(e.pointerId, { b, g, t: now(), x: pt.x, y: pt.y, vx: 0, vy: 0, last: now() });
+  g.hist = [{ t: now(), x: pt.x, y: pt.y }];
+}, { passive: false });
+
+canvas.addEventListener('pointermove', (e) => {
+  const pt = localPoint(e);
+  const st = pointers.get(e.pointerId);
+  if (!st) return;
+  e.preventDefault();
+  const t = now();
+  const dt = Math.max(1, t - st.t) / 1000;
+  const vx = (pt.x - st.x) / dt, vy = (pt.y - st.y) / dt;
+  st.vx = lerp(st.vx, vx, 0.55);
+  st.vy = lerp(st.vy, vy, 0.55);
+  st.t = t; st.x = pt.x; st.y = pt.y;
+  st.g.tx = pt.x; st.g.ty = pt.y;
+  st.g.hist.push({ t, x: pt.x, y: pt.y });
+  if (st.g.hist.length > 12) st.g.hist.shift();
+}, { passive: false });
+
+function endPointer(e, cancelled) {
+  const st = pointers.get(e.pointerId);
+  if (!st) return;
+  pointers.delete(e.pointerId);
+  if (pointers.size === 0) canvas.classList.remove('grabbing');
+  const b = st.b, g = st.g;
+  const i = b.grabs.indexOf(g);
+  if (i >= 0) b.grabs.splice(i, 1);
+  if (b.alive && !cancelled) applyThrow(b, st.vx, st.vy);
+}
+
+/* the whole balloon leaves the hand with the hand's velocity */
+function applyThrow(b, vx, vy) {
+  const sp = Math.hypot(vx, vy);
+  if (sp > 2600) { vx = vx / sp * 2600; vy = vy / sp * 2600; }
+  if (sp < 120) return false;
+  for (const q of b.pts) {
+    const cvx = q.x - q.px, cvy = q.y - q.py;
+    q.px = q.x - (cvx * 0.55 + vx * CFG.DT * 0.85);
+    q.py = q.y - (cvy * 0.55 + vy * CFG.DT * 0.85);
+  }
+  b.thrown = 2.6;
+  Sfx.splash(clamp(sp / 2200, 0.15, 1) * 0.7);
+  return true;
+}
+canvas.addEventListener('pointerup', (e) => endPointer(e, false));
+canvas.addEventListener('pointercancel', (e) => endPointer(e, true));
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') reset();
+  if (e.key === 'm' || e.key === 'M') toggleSound();
+});
+
+/* ------------------------------ UI -------------------------------- */
+function toggleSound() {
+  Sfx.init();
+  Sfx.setOn(!Sfx.on);
+  soundBtn.setAttribute('aria-pressed', String(Sfx.on));
+  soundBtn.setAttribute('aria-label', Sfx.on ? 'Mute sound' : 'Unmute sound');
+  sndLabel.textContent = Sfx.on ? 'Sound' : 'Muted';
+  sndIcon.style.opacity = Sfx.on ? '1' : '0.4';
+}
+
+function reset() {
+  layoutBalloons(true);
+  world.lastPop = null;
+  world.pops = 0;
+  popsEl.textContent = '0';
+  world.t = 0;
+}
+
+resetBtn.addEventListener('click', (e) => { e.preventDefault(); Sfx.init(); reset(); });
+soundBtn.addEventListener('click', (e) => { e.preventDefault(); toggleSound(); });
+
+/* ---------------------------- resize ------------------------------ */
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const oldW = W, oldH = H;
+  W = w; H = h;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  deckH = clamp(H * 0.17, 74, 190);
+  floorY = H - deckH;
+  R = clamp(Math.min(W, H) * 0.082, 22, 82);
+
+  if (oldW && oldH && world.balloons.length) {
+    const sx = W / oldW, sy = H / oldH, sr = Math.min(sx, sy);
+    for (const b of world.balloons) {
+      for (const q of b.pts) {
+        q.x *= sx; q.y *= sy; q.px *= sx; q.py *= sy;
+      }
+      b.cx *= sx; b.cy *= sy;
+      b.r0 *= sr;
+      b.restLen *= sr;
+      b.A0 *= sr * sr;
+    }
+    for (const d of world.drops) { d.x *= sx; d.y *= sy; d.vx *= sx; d.vy *= sy; }
+    for (const w2 of world.wet) { w2.x *= sx; w2.y *= sy; w2.r *= sr; }
+    R *= sr;
+  } else {
+    layoutBalloons(true);
+  }
+  buildVignette();
+}
+
+/* ----------------------------- loop ------------------------------- */
+let acc = 0, lastT = now(), fpsAcc = 0, fpsN = 0, fps = 60;
+
+function frame() {
+  const t = now();
+  let dt = (t - lastT) / 1000;
+  lastT = t;
+  if (dt > 0.1) dt = 0.1;
+  fpsAcc += dt; fpsN++;
+  if (fpsAcc > 0.5) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
+
+  acc += dt;
+  let steps = 0;
+  try {
+    while (acc >= CFG.DT && steps < CFG.MAX_STEPS) {
+      world.t += CFG.DT;
+      physics(CFG.DT);
+      updateEffects(CFG.DT);
+      acc -= CFG.DT;
+      steps++;
+    }
+  } catch (err) {
+    if (!world.err) { world.err = String(err); console.error(err); }
+  }
+  if (steps === CFG.MAX_STEPS) acc = 0;
+
+  // track smoothed balloon velocity for the slosh shading
+  for (const b of world.balloons) {
+    let sx = 0, sy = 0;
+    for (const q of b.pts) { sx += q.x - q.px; sy += q.y - q.py; }
+    b.vx = lerp(b.vx, (sx / b.n) / CFG.DT, 0.12);
+    b.vy = lerp(b.vy, (sy / b.n) / CFG.DT, 0.12);
+  }
+
+  try { render(); } catch (err) { if (!world.err2) { world.err2 = String(err); console.error(err); } }
+  requestAnimationFrame(frame);
+}
+
+/* ----------------------------- boot ------------------------------- */
+buildSprites();
+buildGrain();
+resize();
+world.t = 0;
+requestAnimationFrame(frame);
+
+/* debug hooks for automated checks */
+window.__wb = {
+  state: () => ({
+    fps,
+    pops: world.pops,
+    balloons: world.balloons.map(b => ({
+      x: b.cx, y: b.cy, r: b.r0, area: b.area, strain: b.strain,
+      alive: b.alive, fade: b.fade, grabs: b.grabs.length, impact: b.impactFloor, impW: b.impactWall, spread: b.spread, tension: b.tension, tear: b.tear, hold: b.hold,
+      miny: b.miny, maxy: b.maxy, minx: b.minx, maxx: b.maxx,
+    })),
+    drops: world.drops.length,
+    lastPop: world.lastPop || null,
+    floorY, W, H, R,
+  }),
+  reset,
+  setPop: (v) => { CFG.popEnabled = !!v; },
+  popAll: () => { for (const b of world.balloons.slice()) pop(b); },
+  hit: (x, y) => { const b = hitTest(x, y); return b ? { x: b.cx, y: b.cy } : null; },
+  throwAt: (i, vx, vy) => { const b = world.balloons[i]; return b ? applyThrow(b, vx, vy) : false; },
+  info: (i) => { const b = world.balloons[i]; return b ? { x: b.cx, y: b.cy, r: b.r0, h: b.h, w: b.w, area: b.area, spread: b.spread, reach: b.reach || 0, tear: b.tear, tearT: b.tearT, strain: b.strain, grabs: b.grabs.length } : null; },
+  drag: (x0, y0, x1, y1, secs, release) => {
+    const el = canvas;
+    const ev = (type, x, y) => el.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, pointerId: 9, pointerType: 'mouse', bubbles: true, cancelable: true }));
+    ev('pointerdown', x0, y0);
+    const n = Math.max(1, Math.round(secs / CFG.DT));
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      ev('pointermove', x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+      world.t += CFG.DT; physics(CFG.DT); updateEffects(CFG.DT);
+    }
+    if (release) ev('pointerup', x1, y1);
+    return true;
+  },
+  release: (x, y) => {
+    canvas.dispatchEvent(new PointerEvent('pointerup', { clientX: x, clientY: y, pointerId: 9, pointerType: 'mouse', bubbles: true, cancelable: true }));
+    return true;
+  },
+  simDrag: (x0, y0, dx, dy, dur, release) => {
+    const el = canvas;
+    const ev = (type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+      clientX: x, clientY: y, pointerId: 7, pointerType: 'mouse', bubbles: true, cancelable: true,
+    }));
+    ev('pointerdown', x0, y0);
+    const n = Math.max(1, Math.round(dur / CFG.DT));
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      ev('pointermove', x0 + dx * t, y0 + dy * t);
+      world.t += CFG.DT; physics(CFG.DT); updateEffects(CFG.DT);
+    }
+    if (release) ev('pointerup', x0 + dx, y0 + dy);
+    return true;
+  },
+  advance: (seconds) => {
+    const n = Math.round(seconds / CFG.DT);
+    for (let i = 0; i < n; i++) { world.t += CFG.DT; physics(CFG.DT); updateEffects(CFG.DT); }
+  },
+  spawnAt: (x, y) => { const b = makeBalloon(x, y, R, HUES[0].h, true); b.fade = 0; world.balloons.push(b); return true; },
+};
+})();
+</script>
+</body>
+</html>

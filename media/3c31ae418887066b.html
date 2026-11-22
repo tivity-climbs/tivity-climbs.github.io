@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Gummy Bears</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0b0b14; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  #hud {
+    position: absolute; top: 14px; left: 14px; pointer-events: none;
+    font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 17px; color: #fff;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.7);
+  }
+  #hud b { color: #ff9fd9; }
+  #reset {
+    position: absolute; top: 14px; right: 14px; pointer-events: auto;
+    padding: 10px 24px; font-size: 15px; font-family: sans-serif; color: #fff;
+    background: rgba(255,255,255,0.11);
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 10px; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.5); outline: none;
+  }
+  #reset:hover { background: rgba(255,255,255,0.22); }
+  #reset:active { background: rgba(255,255,255,0.35); }
+</style>
+</head>
+<body>
+<div id="hud">Gummy Bears — <b>grab, pull, squash &amp; fling</b></div>
+<button id="reset">Reset</button>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const resetBtn = document.getElementById('reset');
+
+let W, H;
+function resize(){
+  W = canvas.width = canvas.clientWidth;
+  H = canvas.height = canvas.clientHeight;
+  respawn();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------- physics ----------
+const GRAVITY = 0.28;
+const DAMP = 0.945;
+const BOUNCE = 0.34;
+const PULL_K = 0.075;
+const FLING = 0.7;
+const GRAB_R = 46;
+const JIGGLE = 0.9;
+
+const COLORS = [
+  [255, 105, 180],  // pink
+  [255, 215, 0],    // yellow
+  [60, 205, 60],    // lime
+  [255, 127, 80],   // coral
+  [218, 112, 214],  // purple
+  [0, 255, 255],    // cyan
+  [255, 140, 0],    // orange
+  [138, 43, 226]    // violet
+];
+
+class Node {
+  constructor(x, y) { this.x = this.ox = x; this.y = this.oy = y; this.vx = 0; this.vy = 0; this.fx = 0; this.fy = 0; }
+}
+
+class Bear {
+  constructor(R, color) {
+    this.R = R;
+    this.color = color;
+    this.nodes = [];
+    this.springs = []; // [i, j, len, k, uLen]
+    this.home = [];
+    this.off = []; // unit offset from center (index 0 = center)
+    this.init();
+  }
+  init() {
+    const n = 16;
+    this.off = [{ x: 0, y: 0 }]; // center
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      this.off.push({ x: Math.cos(a), y: Math.sin(a) });
+    }
+    this.nodes.push(new Node(0, 0)); // center
+    for (let i = 0; i < n; i++) {
+      this.nodes.push(new Node(this.off[i + 1].x, this.off[i + 1].y));
+    }
+    const ringLen = 2 * Math.sin(Math.PI / n);
+    const diagLen = 2 * Math.sin(2 * Math.PI / n);
+    for (let i = 0; i < n; i++) {
+      const a = i + 1;
+      const b = (i + 1) % n + 1;
+      this.springs.push([a, b, ringLen, 0.13, ringLen]); // ring spring
+      this.springs.push([a, b, diagLen, 0.07, diagLen]); // diagonal spring (stiffness)
+      this.springs.push([0, a, 1.0, 0.11, 1.0]);           // radial spring to center
+    }
+  }
+  place(cx, cy) {
+    for (let i = 0; i < this.nodes.length; i++) {
+      this.home[i] = { x: cx + this.off[i].x * this.R, y: cy + this.off[i].y * this.R };
+    }
+    for (let s of this.springs) s[2] = s[4] * this.R; // scale rest length by radius
+  }
+  reset() {
+    for (let i = 0; i < this.nodes.length; i++) {
+      const nd = this.nodes[i];
+      nd.x = this.home[i].x;
+      nd.y = this.home[i].y;
+      nd.vx = 0;
+      nd.vy = 0;
+    }
+  }
+}
+
+let bears = [];
+function respawn() {
+  bears = [];
+  const count = 12;
+  for (let i = 0; i < count; i++) {
+    const R = 28 + Math.random() * 16;
+    const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    const bear = new Bear(R, color);
+    // tight horizontal cluster near center, spread vertically so they fall
+    // from different heights and stack into a mound
+    const cx = (0.45 + (Math.random() - 0.5) * 0.09) * W;
+    const cy = (0.05 + Math.random() * 0.55) * H;
+    bear.place(cx, cy);
+    bear.reset();
+    bears.push(bear);
+  }
+}
+
+resetBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  respawn();
+});
+
+// ---------- input ----------
+let mouseX = 0, mouseY = 0;
+let lastMouseX = 0, lastMouseY = 0;
+let grabbed = null; // { bear, node }
+let activeTouchId = null;
+
+function updateMouse(x, y) {
+  mouseX = x; mouseY = y;
+  lastMouseX = x; lastMouseY = y;
+}
+
+function grab(x, y) {
+  let best = null, bestd = Infinity;
+  for (let bear of bears) {
+    for (let nd of bear.nodes) {
+      const d = Math.hypot(nd.x - x, nd.y - y);
+      if (d < bestd) { bestd = d; best = { bear, node: nd }; }
+    }
+  }
+  if (best && bestd < GRAB_R) grabbed = best;
+}
+
+function release() {
+  if (!grabbed) return;
+  const nd = grabbed.node;
+  nd.vx += (mouseX - lastMouseX) * FLING;
+  nd.vy += (mouseY - lastMouseY) * FLING;
+  // jiggle impulse
+  for (let nn of grabbed.bear.nodes) {
+    nn.vx += (Math.random() - 0.5) * JIGGLE;
+    nn.vy += (Math.random() - 0.5) * JIGGLE;
+  }
+  grabbed = null;
+}
+
+window.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  updateMouse(e.clientX - rect.left, e.clientY - rect.top);
+  grab(mouseX, mouseY);
+});
+window.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  updateMouse(e.clientX - rect.left, e.clientY - rect.top);
+});
+window.addEventListener('mouseup', e => {
+  const rect = canvas.getBoundingClientRect();
+  updateMouse(e.clientX - rect.left, e.clientY - rect.top);
+  release();
+});
+window.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const t = e.changedTouches[0];
+  updateMouse(t.clientX - rect.left, t.clientY - rect.top);
+  grab(mouseX, mouseY);
+  activeTouchId = t.identifier;
+}, { passive: false });
+window.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (let t of e.changedTouches) {
+    if (t.identifier === activeTouchId) {
+      const rect = canvas.getBoundingClientRect();
+      updateMouse(t.clientX - rect.left, t.clientY - rect.top);
+      break;
+    }
+  }
+});
+window.addEventListener('touchend', e => {
+  release();
+  activeTouchId = null;
+});
+
+// ---------- simulation step ----------
+function step() {
+  // clear forces
+  for (let bear of bears) {
+    for (let nd of bear.nodes) { nd.fx = 0; nd.fy = 0; }
+  }
+  // gravity
+  for (let bear of bears) {
+    for (let nd of bear.nodes) nd.fy += GRAVITY;
+  }
+  // internal springs
+  for (let bear of bears) {
+    for (let s of bear.springs) {
+      const i = bear.nodes[s[0]], j = bear.nodes[s[1]];
+      const dx = j.x - i.x, dy = j.y - i.y;
+      const d = Math.hypot(dx, dy);
+      if (d === 0) continue;
+      const f = (d - s[2]) * s[3];
+      i.fx += f * dx / d;
+      i.fy += f * dy / d;
+      j.fx -= f * dx / d;
+      j.fy -= f * dy / d;
+    }
+  }
+  // mouse pull on grabbed node
+  if (grabbed) {
+    const nd = grabbed.node;
+    nd.fx += (mouseX - nd.x) * PULL_K;
+    nd.fy += (mouseY - nd.y) * PULL_K;
+  }
+  // center-center repulsion (collision between bears)
+  for (let a = 0; a < bears.length; a++) {
+    for (let b = a + 1; b < bears.length; b++) {
+      const ca = bears[a].nodes[0], cb = bears[b].nodes[0];
+      const dx = cb.x - ca.x, dy = cb.y - ca.y;
+      const d = Math.hypot(dx, dy);
+      const minD = bears[a].R + bears[b].R;
+      if (d > 0 && d < minD) {
+        const overlap = minD - d;
+        const f = overlap * 0.05;
+        const nx = dx / d, ny = dy / d;
+        ca.fx -= f * nx; ca.fy -= f * ny;
+        cb.fx += f * nx; cb.fy += f * ny;
+      }
+    }
+  }
+  // integrate (mass = 1, dt = 1)
+  for (let bear of bears) {
+    for (let nd of bear.nodes) {
+      nd.vx += nd.fx;
+      nd.vy += nd.fy;
+      nd.vx *= DAMP;
+      nd.vy *= DAMP;
+      nd.x += nd.vx;
+      nd.y += nd.vy;
+    }
+  }
+  // constraints on centers (ground + walls)
+  for (let bear of bears) {
+    const c = bear.nodes[0];
+    if (c.y + bear.R > H) { c.y = H - bear.R; c.vy *= -BOUNCE; }
+    if (c.x < bear.R) { c.x = bear.R; c.vx *= -0.5; }
+    if (c.x > W - bear.R) { c.x = W - bear.R; c.vx *= -0.5; }
+  }
+}
+
+// ---------- rendering ----------
+function drawBear(bear) {
+  const nodes = bear.nodes;
+  const n = nodes.length - 1;
+  const cx = nodes[0].x, cy = nodes[0].y;
+  const R = bear.R;
+  const [r, g, b] = bear.color;
+
+  // outer contour path through ring nodes
+  ctx.beginPath();
+  for (let i = 1; i <= n; i++) {
+    const nd = nodes[i];
+    if (i === 1) ctx.moveTo(nd.x, nd.y);
+    else ctx.lineTo(nd.x, nd.y);
+  }
+  ctx.closePath();
+
+  // contact shadow under the blob
+  const sgrad = ctx.createRadialGradient(cx, cy + R, R * 0.1, cx, cy + R, R * 1.6);
+  sgrad.addColorStop(0, 'rgba(0,0,0,0.34)');
+  sgrad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = sgrad;
+  ctx.ellipse(cx, cy + R * 0.5, R * 0.9, R * 0.45, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // translucent jelly body
+  const grad = ctx.createRadialGradient(cx, cy, R * 0.05, cx, cy, R);
+  grad.addColorStop(0, `rgba(${r},${g},${b},0.92)`);
+  grad.addColorStop(0.35, `rgba(${r},${g},${b},0.68)`);
+  grad.addColorStop(1, `rgba(${r},${g},${b},0.16)`);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // contour stroke for definition
+  ctx.strokeStyle = `rgba(${r},${g},${b},0.6)`;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // specular highlight (light from top-left)
+  const hx = cx - R * 0.22, hy = cy - R * 0.22;
+  const hgrad = ctx.createRadialGradient(hx, hy, R * 0.04, hx, hy, R * 0.7);
+  hgrad.addColorStop(0, 'rgba(255,255,255,0.8)');
+  hgrad.addColorStop(0.5, 'rgba(255,255,255,0.2)');
+  hgrad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = hgrad;
+  ctx.fill();
+}
+
+function animate() {
+  // vignette / spotlight background
+  const vig = ctx.createRadialGradient(W * 0.5, H * 0.5, W * 0.2, W * 0.5, H * 0.5, W * 0.9);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.62)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, W, H);
+
+  step();
+
+  // draw back-to-front (lower on screen = closer)
+  const ordered = [...bears].sort((a, b) => b.nodes[0].y - a.nodes[0].y);
+  for (let bear of ordered) drawBear(bear);
+
+  // show the grabbed node
+  if (grabbed) {
+    const nd = grabbed.node;
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.beginPath();
+    ctx.arc(nd.x, nd.y, 7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  requestAnimationFrame(animate);
+}
+
+animate();
+</script>
+</body>
+</html>

@@ -1,0 +1,1274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#120c1f">
+<title>Gummy Room — a squishy pile of soft-body bears</title>
+<style>
+  :root{
+    --ink:#FFF2F7;
+    --ink-dim:rgba(255,236,245,.62);
+    --ink-faint:rgba(255,236,245,.38);
+    --glass:rgba(255,240,250,.085);
+    --glass-edge:rgba(255,236,250,.20);
+    --plum:#120c1f;
+    --rounded: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN", "Arial Rounded MT Bold", "Varela Round", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--plum); color:var(--ink);
+    font-family:var(--rounded); overflow:hidden;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    overscroll-behavior:none;
+  }
+  #stage{position:fixed; inset:0; touch-action:none; cursor:default}
+  canvas{position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none}
+  .ui{position:absolute; inset:0; pointer-events:none; display:flex; flex-direction:column; justify-content:space-between;
+      padding:clamp(18px,3.2vw,42px) clamp(18px,3.4vw,46px) clamp(18px,3vw,40px);
+      padding-top:max(clamp(18px,3.2vw,42px), env(safe-area-inset-top));
+      padding-bottom:max(clamp(18px,3vw,40px), env(safe-area-inset-bottom));}
+  header{max-width:34ch}
+  h1{
+    margin:0; font-size:clamp(27px,3.1vw,42px); font-weight:800; letter-spacing:-.035em; line-height:1.02;
+    color:#FFF6F1; text-shadow:0 1px 0 rgba(255,255,255,.18), 0 10px 34px rgba(255,120,170,.25);
+  }
+  h1 em{font-style:normal; color:#FFC7DA}
+  .sub{margin:.55em 0 0; font-size:clamp(13px,1.05vw,15.5px); line-height:1.5; color:var(--ink-dim); font-weight:500; max-width:30ch}
+  .bottom{display:flex; align-items:flex-end; justify-content:space-between; gap:14px}
+  .hint{
+    font-size:13.5px; font-weight:600; color:var(--ink-dim); letter-spacing:-.005em;
+    display:flex; align-items:center; gap:9px; transition:opacity .5s ease, transform .5s ease;
+    padding-bottom:6px;
+  }
+  .hint .dot{width:7px;height:7px;border-radius:50%;background:#FF9DC0;box-shadow:0 0 12px 2px rgba(255,120,170,.75); flex:none}
+  .hint.gone{opacity:0; transform:translateY(6px)}
+  .controls{display:flex; align-items:center; gap:10px; pointer-events:auto}
+  button{font:inherit; color:var(--ink); cursor:pointer; -webkit-tap-highlight-color:transparent; border:0; background:none}
+  .pill{
+    display:inline-flex; align-items:center; gap:9px;
+    padding:12px 20px 12px 17px; border-radius:999px;
+    background:var(--glass); border:1px solid var(--glass-edge);
+    -webkit-backdrop-filter:blur(14px) saturate(1.2); backdrop-filter:blur(14px) saturate(1.2);
+    font-size:14.5px; font-weight:700; letter-spacing:.005em;
+    box-shadow:0 10px 30px rgba(6,2,14,.45), inset 0 1px 0 rgba(255,255,255,.16);
+    transition:background .18s ease, transform .12s ease, box-shadow .18s ease, border-color .18s ease;
+  }
+  .pill:hover{background:rgba(255,240,250,.16); border-color:rgba(255,236,250,.34); box-shadow:0 14px 34px rgba(6,2,14,.5), inset 0 1px 0 rgba(255,255,255,.24)}
+  .pill:active{transform:scale(.965)}
+  .pill svg{width:15px;height:15px;flex:none;opacity:.9}
+  .icon{
+    width:46px;height:46px;border-radius:50%; display:grid; place-items:center;
+    background:var(--glass); border:1px solid var(--glass-edge);
+    -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px);
+    box-shadow:0 10px 30px rgba(6,2,14,.4), inset 0 1px 0 rgba(255,255,255,.14);
+    transition:background .18s ease, transform .12s ease;
+  }
+  .icon:hover{background:rgba(255,240,250,.16)}
+  .icon:active{transform:scale(.94)}
+  .icon svg{width:18px;height:18px}
+  .icon .off{display:none}
+  .icon.muted .on{display:none}
+  .icon.muted .off{display:block}
+  button:focus-visible{outline:2px solid #FFB3CE; outline-offset:3px}
+  .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  @media (max-width:560px){
+    .sub{max-width:26ch}
+    .hint{font-size:12.5px; max-width:16ch; line-height:1.35}
+    .pill{padding:11px 17px 11px 15px; font-size:13.5px}
+    .icon{width:42px;height:42px}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .hint{transition:none}
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c" role="application" aria-label="A pile of translucent gummy bears. Drag a bear to stretch it, release to fling it. Press R to reset the pile."></canvas>
+  <div class="ui">
+    <header>
+      <h1>Gummy <em>Room</em></h1>
+      <p class="sub">A pile of soft, see-through bears. Grab one, stretch it thin, then let go.</p>
+    </header>
+    <div class="bottom">
+      <div class="hint" id="hint"><span class="dot"></span><span>Drag a bear. Let go to fling it.</span></div>
+      <div class="controls">
+        <button class="icon" id="sound" aria-pressed="true" aria-label="Mute sound">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path class="on" d="M4 9.5h3.2L12 5.4v13.2L7.2 14.5H4z"/><path class="on" d="M15.6 9.2a4 4 0 0 1 0 5.6"/><path class="on" d="M18.2 6.6a7.6 7.6 0 0 1 0 10.8"/>
+            <path class="off" d="M4 9.5h3.2L12 5.4v13.2L7.2 14.5H4z"/><path class="off" d="M16 9.6l4.4 4.8M20.4 9.6L16 14.4"/>
+          </svg>
+        </button>
+        <button class="pill" id="reset" aria-label="Reset the pile of gummy bears">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4.4h-4.4"/>
+          </svg>
+          Reset
+        </button>
+      </div>
+    </div>
+  </div>
+  <p class="sr" id="live" aria-live="polite"></p>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ------------------------------------------------------------------ *
+ *  Gummy Room — code-only soft-body gummy bears.
+ *  Canvas 2D, no libraries, no external assets.
+ * ------------------------------------------------------------------ */
+
+/* ---------------------------- math ------------------------------- */
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp  = (a, b, t) => a + (b - a) * t;
+const smooth = (t) => t * t * (3 - 2 * t);
+const TAU = Math.PI * 2;
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/* ------------------- bear silhouette (metaballs) ------------------ *
+ * The silhouette is the zero level-set of a smooth union of ellipses,
+ * traced with marching squares and resampled to uniform arc-length
+ * nodes that double as the soft-body mesh.
+ * ------------------------------------------------------------------ */
+const BLOBS = [
+  // core: head, ears, snout, torso, belly, shoulders
+  { x:  0.000, y:  0.335, rx: 0.152, ry: 0.144, g: 0 },
+  { x: -0.120, y:  0.465, rx: 0.064, ry: 0.064, g: 0 },
+  { x:  0.120, y:  0.465, rx: 0.064, ry: 0.064, g: 0 },
+  { x:  0.000, y:  0.276, rx: 0.080, ry: 0.058, g: 0 },
+  { x:  0.000, y:  0.030, rx: 0.156, ry: 0.170, g: 0 },
+  { x:  0.000, y: -0.035, rx: 0.144, ry: 0.130, g: 0 },
+  { x: -0.118, y:  0.160, rx: 0.072, ry: 0.072, g: 0 },
+  { x:  0.118, y:  0.160, rx: 0.072, ry: 0.072, g: 0 },
+  // arms: their own group so the armpit crease stays crisp
+  { x: -0.180, y:  0.052, rx: 0.042, ry: 0.044, g: 1 },
+  { x:  0.180, y:  0.052, rx: 0.042, ry: 0.044, g: 1 },
+  { x: -0.198, y: -0.038, rx: 0.040, ry: 0.042, g: 1 },
+  { x:  0.198, y: -0.038, rx: 0.040, ry: 0.042, g: 1 },
+  // legs + feet
+  { x: -0.092, y: -0.205, rx: 0.064, ry: 0.072, g: 2 },
+  { x:  0.092, y: -0.205, rx: 0.064, ry: 0.072, g: 2 },
+  { x: -0.100, y: -0.292, rx: 0.070, ry: 0.046, g: 2 },
+  { x:  0.100, y: -0.292, rx: 0.070, ry: 0.046, g: 2 },
+];
+
+function smin(a, b, k) {
+  const h = clamp(0.5 + 0.5 * (b - a) / k, 0, 1);
+  return lerp(b, a, h) - k * h * (1 - h);
+}
+
+function groupField(x, y, g, k) {
+  let d = 1e9;
+  for (let i = 0; i < BLOBS.length; i++) {
+    const b = BLOBS[i];
+    if (b.g !== g) continue;
+    const dx = (x - b.x) / b.rx, dy = (y - b.y) / b.ry;
+    const r = Math.sqrt(dx * dx + dy * dy);
+    d = smin(d, (r - 1) * Math.min(b.rx, b.ry), k);
+  }
+  return d;
+}
+function bearField(x, y) {
+  let d = groupField(x, y, 0, 0.038);
+  d = smin(d, groupField(x, y, 1, 0.018), 0.016);
+  d = smin(d, groupField(x, y, 2, 0.020), 0.018);
+  return d;
+}
+
+function buildOutline(nodes) {
+  const x0 = -0.52, x1 = 0.52, y0 = -0.52, y1 = 0.60;
+  const step = 0.005;
+  const nx = Math.ceil((x1 - x0) / step) + 1;
+  const ny = Math.ceil((y1 - y0) / step) + 1;
+  const f = new Float32Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    const y = y0 + j * step;
+    for (let i = 0; i < nx; i++) {
+      f[j * nx + i] = bearField(x0 + i * step, y);
+    }
+  }
+  const at = (i, j) => f[j * nx + i];
+  const px = (i) => x0 + i * step, py = (j) => y0 + j * step;
+
+  // marching squares, endpoint-keyed joining
+  const segs = [];
+  const edgePt = (i0, j0, v0, i1, j1, v1) => {
+    const t = v0 / (v0 - v1);
+    return { x: px(i0) + (px(i1) - px(i0)) * t, y: py(j0) + (py(j1) - py(j0)) * t };
+  };
+  const TABLE = [
+    [], [[3, 0]], [[0, 1]], [[3, 1]], [[1, 2]], [[3, 0], [1, 2]], [[0, 2]], [[3, 2]],
+    [[2, 3]], [[2, 0]], [[0, 1], [2, 3]], [[2, 1]], [[1, 3]], [[1, 0]], [[0, 3]], []
+  ];
+  for (let j = 0; j < ny - 1; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      const va = at(i, j), vb = at(i + 1, j), vc = at(i + 1, j + 1), vd = at(i, j + 1);
+      const k = (va < 0 ? 1 : 0) | (vb < 0 ? 2 : 0) | (vc < 0 ? 4 : 0) | (vd < 0 ? 8 : 0);
+      const pairs = TABLE[k];
+      if (!pairs.length) continue;
+      const E = [
+        () => edgePt(i, j, va, i + 1, j, vb),        // 0 top
+        () => edgePt(i + 1, j, vb, i + 1, j + 1, vc),// 1 right
+        () => edgePt(i, j + 1, vd, i + 1, j + 1, vc),// 2 bottom
+        () => edgePt(i, j, va, i, j + 1, vd),        // 3 left
+      ];
+      for (const [ea, eb] of pairs) segs.push([E[ea](), E[eb]()]);
+    }
+  }
+  // join into a closed loop
+  const key = (p) => Math.round(p.x * 1e5) + ',' + Math.round(p.y * 1e5);
+  const buckets = new Map();
+  segs.forEach((s, idx) => {
+    for (const p of s) {
+      const k = key(p);
+      if (!buckets.has(k)) buckets.set(k, []);
+      buckets.get(k).push(idx);
+    }
+  });
+  const used = new Uint8Array(segs.length);
+  const loop = [];
+  let cur = 0;
+  let p = segs[0][0];
+  let q = segs[0][1];
+  used[0] = 1;
+  loop.push(p, q);
+  while (loop.length < segs.length + 2) {
+    const cand = buckets.get(key(q)) || [];
+    let next = -1;
+    for (const idx of cand) if (!used[idx]) { next = idx; break; }
+    if (next < 0) break;
+    used[next] = 1;
+    const s = segs[next];
+    const nxt = key(s[0]) === key(q) ? s[1] : s[0];
+    loop.push(nxt);
+    q = nxt;
+    if (q === p) break;
+  }
+  // resample uniformly by arc length
+  const cum = [0];
+  for (let i = 1; i < loop.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(loop[i].x - loop[i - 1].x, loop[i].y - loop[i - 1].y));
+  }
+  const total = cum[cum.length - 1];
+  const out = [];
+  let seg = 0;
+  for (let n = 0; n < nodes; n++) {
+    const target = (n / nodes) * total;
+    while (seg < cum.length - 2 && cum[seg + 1] < target) seg++;
+    const t = (target - cum[seg]) / Math.max(1e-9, cum[seg + 1] - cum[seg]);
+    out.push({
+      x: lerp(loop[seg].x, loop[seg + 1].x, t),
+      y: lerp(loop[seg].y, loop[seg + 1].y, t),
+    });
+  }
+  // centre on the area centroid, normalise height to 1
+  let A = 0, cx = 0, cy = 0;
+  for (let i = 0; i < out.length; i++) {
+    const a = out[i], b = out[(i + 1) % out.length];
+    const cr = a.x * b.y - b.x * a.y;
+    A += cr; cx += (a.x + b.x) * cr; cy += (a.y + b.y) * cr;
+  }
+  A *= 0.5; cx /= (6 * A); cy /= (6 * A);
+  let minY = 1e9, maxY = -1e9;
+  for (const p of out) { minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+  const s = 1 / (maxY - minY);
+  return out.map(p => ({ x: (p.x - cx) * s, y: (p.y - cy) * s }));
+}
+
+const OUTLINE = buildOutline(56);
+const NN = OUTLINE.length;
+// Centre the node ring on its own mean: shape matching fits a rigid
+// transform per node, so a mean offset would drift the bear every step.
+const REST = new Float32Array(NN * 2);
+{
+  let mx = 0, my = 0;
+  for (const p of OUTLINE) { mx += p.x; my += p.y; }
+  mx /= NN; my /= NN;
+  OUTLINE.forEach((p, i) => {
+    p.x -= mx; p.y -= my;
+    REST[i * 2] = p.x; REST[i * 2 + 1] = p.y;
+  });
+}
+// rest-space grab radii
+const BEAR_H = 1; // rest height in units
+
+/* --------------------------- scene setup -------------------------- */
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+const stage = document.getElementById('stage');
+const hintEl = document.getElementById('hint');
+const liveEl = document.getElementById('live');
+
+let W = 0, H = 0, DPR = 1, floorY = 0, unit = 200;
+let pxScale = 1;        // DPR * quality: actual backbuffer scale
+let quality = 1;        // drops on slow machines so the pile stays smooth
+let dishCx = 0, dishHalf = 400, dishK = 0.0007;
+function floorAt(x) {
+  const d = clamp((x - dishCx) / dishHalf, -1, 1);
+  return floorY - dishK * dishHalf * dishHalf * d * d;
+}
+
+function applySize() {
+  pxScale = DPR * quality;
+  canvas.width = Math.round(W * pxScale);
+  canvas.height = Math.round(H * pxScale);
+  ctx.setTransform(pxScale, 0, 0, pxScale, 0, 0);
+  buildBackdrop();
+}
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = w; H = h;
+  unit = clamp(Math.min(w, h) * 0.235, 120, 260);
+  floorY = h - Math.min(h * 0.235, 220);
+  dishCx = w * 0.5;
+  dishHalf = Math.min(w * 0.30, 440);
+  dishK = clamp(96 / (dishHalf * dishHalf), 0, 1);
+  quality = 1;
+  perf.cool = 240; perf.n = 0; perf.s = 1 / 60;
+  layoutBears();
+  applySize();
+}
+
+/* --------------------------- the bears ---------------------------- */
+const PALETTE = [
+  { h: 338, s: 88, l: 61 },  // raspberry
+  { h: 88,  s: 72, l: 55 },  // lime
+  { h: 30,  s: 94, l: 60 },  // mango
+  { h: 200, s: 88, l: 62 },  // blue raspberry
+  { h: 268, s: 72, l: 66 },  // grape
+  { h: 12,  s: 86, l: 61 },  // cherry
+  { h: 48,  s: 92, l: 62 },  // pineapple
+  { h: 172, s: 62, l: 55 },  // apple
+  { h: 316, s: 70, l: 68 },  // violet
+];
+
+function crossP(p, o, a, b) {
+  return (p[a * 2] - p[o * 2]) * (p[b * 2 + 1] - p[o * 2 + 1]) -
+         (p[a * 2 + 1] - p[o * 2 + 1]) * (p[b * 2] - p[o * 2]);
+}
+
+class Bear {
+  constructor(i, x, y, scale, color, angle) {
+    this.id = i;
+    this.color = color;
+    this.scale = scale;
+    this.p = new Float32Array(NN * 2);
+    this.pp = new Float32Array(NN * 2);
+    this.q = new Float32Array(NN * 2);
+    for (let n = 0; n < NN; n++) {
+      this.q[n * 2] = REST[n * 2] * scale;
+      this.q[n * 2 + 1] = REST[n * 2 + 1] * scale;
+    }
+    this.grab = null;
+    this.theta = angle;
+    this.hull = new Float32Array(NN * 2);
+    this.hullN = 0;
+    this._idx = new Array(NN);
+    this._lo = [];
+    this._up = [];
+    this.radius = 0.78 * scale;
+    // pre-baked colour strings: no string building in the draw loop
+    const c = color;
+    this.c = {
+      base0: hsl(c.h, c.s * 0.92, Math.min(88, c.l + 20), 0.94),
+      base1: hsl(c.h, c.s, c.l, 0.90),
+      base2: hsl(c.h + 6, c.s, c.l * 0.58, 0.88),
+      core0: hsl(c.h + 4, c.s, c.l * 0.46, 0.46),
+      core1: hsl(c.h + 10, c.s, c.l * 0.38, 0.09),
+      sub0: hsl(c.h, c.s * 0.7, Math.min(96, c.l + 34), 0.38),
+      sub1: hsl(c.h, c.s, c.l + 10, 0.13),
+      sub2: hsl(c.h, c.s, c.l, 0),
+      rim1: hsl(c.h, c.s * 0.6, 82, 0.35),
+      rim2: hsl(c.h, c.s, c.l * 0.8, 0.05),
+      line: hsl(c.h + 8, c.s * 0.8, 18, 0.35),
+      ghost: hsl(c.h, c.s * 0.95, c.l * 0.5, 0.26),
+    };
+    this.place(x, y, angle);
+    this.seed = i * 977 + 13;
+    this.rnd = mulberry32(this.seed);
+    this.sparkles = [];
+    const r = mulberry32(this.seed * 3 + 7);
+    for (let k = 0; k < 7; k++) {
+      const a = r() * TAU, rr = Math.sqrt(r()) * 0.30;
+      this.sparkles.push({ x: Math.cos(a) * rr, y: Math.sin(a) * rr, s: 0.010 + r() * 0.022, a: 0.10 + r() * 0.22 });
+    }
+    this.impact = 0;   // visual squish flash
+    this.calm = 1;
+  }
+  place(x, y, angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    for (let n = 0; n < NN; n++) {
+      const qx = this.q[n * 2], qy = this.q[n * 2 + 1];
+      const px = x + qx * c - qy * s;
+      const py = y + qx * s + qy * c;
+      this.p[n * 2] = px; this.p[n * 2 + 1] = py;
+      this.pp[n * 2] = px; this.pp[n * 2 + 1] = py;
+    }
+    this.computeHull();
+    this.centroid();
+  }
+  centroid() {
+    let cx = 0, cy = 0;
+    for (let n = 0; n < NN; n++) { cx += this.p[n * 2]; cy += this.p[n * 2 + 1]; }
+    this.cx = cx / NN; this.cy = cy / NN;
+    return this;
+  }
+  computeHull() {
+    // Andrew monotone chain over the deformed nodes (buffers reused: no GC churn)
+    const p = this.p, idx = this._idx, lo = this._lo, up = this._up;
+    for (let i = 0; i < NN; i++) idx[i] = i;
+    idx.sort((a, b) => (p[a * 2] - p[b * 2]) || (p[a * 2 + 1] - p[b * 2 + 1]));
+    lo.length = 0; up.length = 0;
+    for (let k = 0; k < NN; k++) {
+      const i = idx[k];
+      while (lo.length >= 2 && crossP(p, lo[lo.length - 2], lo[lo.length - 1], i) <= 0) lo.pop();
+      lo.push(i);
+    }
+    for (let k = NN - 1; k >= 0; k--) {
+      const i = idx[k];
+      while (up.length >= 2 && crossP(p, up[up.length - 2], up[up.length - 1], i) <= 0) up.pop();
+      up.push(i);
+    }
+    lo.pop(); up.pop();
+    const nl = lo.length, nu = up.length;
+    this.hullN = nl + nu;
+    for (let i = 0; i < nl; i++) {
+      const n = lo[i];
+      this.hull[i * 2] = p[n * 2]; this.hull[i * 2 + 1] = p[n * 2 + 1];
+    }
+    for (let i = 0; i < nu; i++) {
+      const n = up[i], k = nl + i;
+      this.hull[k * 2] = p[n * 2]; this.hull[k * 2 + 1] = p[n * 2 + 1];
+    }
+    // bounding radius from centroid
+    let r2 = 0, cx = 0, cy = 0;
+    for (let n = 0; n < NN; n++) { cx += p[n * 2]; cy += p[n * 2 + 1]; }
+    cx /= NN; cy /= NN;
+    for (let i = 0; i < this.hullN; i++) {
+      const dx = this.hull[i * 2] - cx, dy = this.hull[i * 2 + 1] - cy;
+      r2 = Math.max(r2, dx * dx + dy * dy);
+    }
+    this.cx = cx; this.cy = cy;
+    this.radius = Math.sqrt(r2);
+  }
+  insideHull(x, y) {
+    // quick reject with the bounding circle
+    const dx = x - this.cx, dy = y - this.cy;
+    if (dx * dx + dy * dy > this.radius * this.radius) return false;
+    let sign = 0;
+    for (let i = 0; i < this.hullN; i++) {
+      const j = (i + 1) % this.hullN;
+      const ax = this.hull[i * 2], ay = this.hull[i * 2 + 1];
+      const bx = this.hull[j * 2], by = this.hull[j * 2 + 1];
+      const c = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+      if (Math.abs(c) < 1e-6) continue;
+      const s = c > 0 ? 1 : -1;
+      if (sign === 0) sign = s;
+      else if (s !== sign) return false;
+    }
+    return true;
+  }
+}
+
+let bears = [];
+let drawOrder = [];
+
+function layoutBears() {
+  bears = [];
+  const rnd = mulberry32(48271);
+  const bw = unit * 0.52;
+  const cols = [0, 3, 1, 5, 2, 6, 4, 7, 8, 1, 4];
+  // rows follow the bowl so nothing has to fall or overlap much
+  const rows = [
+    [-2.0, -1.0, 0.0, 1.0, 2.0],
+    [-1.45, -0.42, 0.62, 1.62],
+    [-0.85, 0.18],
+  ];
+  let k = 0;
+  for (let r = 0; r < rows.length; r++) {
+    for (const sx of rows[r]) {
+      const scale = unit * (0.95 + rnd() * 0.14);
+      const x = dishCx + sx * bw * 0.94 + (rnd() - 0.5) * bw * 0.13;
+      const y = floorAt(x) - scale * 0.5 - r * scale * 0.93 + (rnd() - 0.5) * 4;
+      const rot = (rnd() - 0.5) * 0.16;
+      bears.push(new Bear(k, x, y, scale, PALETTE[cols[k % cols.length] % PALETTE.length], rot));
+      k++;
+    }
+  }
+  drawOrder = bears.slice();
+  prewarm();
+}
+
+function prewarm() {
+  for (let i = 0; i < 260; i++) step(1 / 120);
+  for (const b of bears) { b.pp.set(b.p); b.theta = 0; }
+}
+
+/* --------------------------- simulation --------------------------- */
+const GRAVITY = 2400;
+const DAMP = 0.998;      // per substep (120 Hz)
+const STIFF = 0.16;      // shape-matching stiffness per iteration
+const SUBSTEPS = 2;
+const ITER = 2;
+
+const pointer = { x: 0, y: 0, active: false, vx: 0, vy: 0, down: false, moved: false };
+const light = { x: 0, y: 0, tx: 0, ty: 0 };
+
+function step(dt) {
+  for (let s = 0; s < SUBSTEPS; s++) {
+    for (const b of bears) integrate(b, dt);
+    for (let it = 0; it < ITER; it++) {
+      for (const b of bears) shapeMatch(b);
+      for (const b of bears) { b.computeHull(); contactStatic(b); }
+      for (let i = 0; i < bears.length; i++) {
+        for (let j = i + 1; j < bears.length; j++) {
+          const A = bears[i], B = bears[j];
+          const dx = A.cx - B.cx, dy = A.cy - B.cy;
+          const rr = A.radius + B.radius;
+          if (dx * dx + dy * dy > rr * rr) continue;
+          contactPair(A, B);
+        }
+      }
+      for (const b of bears) if (b.grab) grabSolve(b, dt);
+    }
+  }
+  for (const b of bears) {
+    let sp = 0;
+    for (let n = 0; n < NN; n++) sp += Math.hypot(b.p[n * 2] - b.pp[n * 2], b.p[n * 2 + 1] - b.pp[n * 2 + 1]);
+    b.calm = clamp(1 - (sp / NN) / 2.5, 0, 1);
+    dampSpin(b, 0.12);
+  }
+  for (const b of bears) b.computeHull();
+}
+
+function integrate(b, dt) {
+  const p = b.p, pp = b.pp;
+  const g = GRAVITY * dt * dt;
+  for (let n = 0; n < NN; n++) {
+    const i = n * 2, j = i + 1;
+    // a little per-node softness so the mass reads as jelly, not rubber
+    const vx = (p[i] - pp[i]) * DAMP;
+    const vy = (p[j] - pp[j]) * DAMP;
+    pp[i] = p[i]; pp[j] = p[j];
+    p[i] += vx;
+    p[j] += vy + g;
+  }
+}
+
+function shapeMatch(b) {
+  const p = b.p, q = b.q;
+  let cx = 0, cy = 0;
+  for (let n = 0; n < NN; n++) { cx += p[n * 2]; cy += p[n * 2 + 1]; }
+  cx /= NN; cy /= NN;
+  let dot = 0, crs = 0;
+  for (let n = 0; n < NN; n++) {
+    const px = p[n * 2] - cx, py = p[n * 2 + 1] - cy;
+    const qx = q[n * 2], qy = q[n * 2 + 1];
+    dot += qx * px + qy * py;
+    crs += qx * py - qy * px;
+  }
+  let theta = Math.atan2(crs, dot);
+  // gummy bears settle flat side down: a weak righting torque when calm
+  const upright = b.calm * 0.10;
+  if (upright > 0.001) {
+    const target = Math.round(theta / TAU) * TAU;
+    theta += (target - theta) * upright;
+  }
+  b.theta = theta;
+  const c = Math.cos(theta), s = Math.sin(theta);
+  for (let n = 0; n < NN; n++) {
+    const qx = q[n * 2], qy = q[n * 2 + 1];
+    const gx = cx + qx * c - qy * s;
+    const gy = cy + qx * s + qy * c;
+    p[n * 2] += (gx - p[n * 2]) * STIFF;
+    p[n * 2 + 1] += (gy - p[n * 2 + 1]) * STIFF;
+  }
+  b.cx = cx; b.cy = cy;
+}
+
+function grabSolve(b, dt) {
+  const g = b.grab;
+  const c = Math.cos(b.theta), s = Math.sin(b.theta);
+  const strength = 0.9;
+  for (let k = 0; k < g.nodes.length; k++) {
+    const n = g.nodes[k], w = g.weights[k];
+    const qx = b.q[n * 2] - g.localX, qy = b.q[n * 2 + 1] - g.localY;
+    const tx = g.x + qx * c - qy * s;
+    const ty = g.y + qx * s + qy * c;
+    const dx = (tx - b.p[n * 2]) * w * strength;
+    const dy = (ty - b.p[n * 2 + 1]) * w * strength;
+    b.p[n * 2] += dx; b.p[n * 2 + 1] += dy;
+    // carry most of the motion into the velocity so a release flings
+    b.pp[n * 2] += dx * 0.15; b.pp[n * 2 + 1] += dy * 0.15;
+  }
+}
+
+// gentle rolling resistance: gummy bears do not roll like marbles
+function dampSpin(b, k) {
+  const p = b.p, pp = b.pp;
+  let cx = 0, cy = 0;
+  for (let n = 0; n < NN; n++) { cx += p[n * 2]; cy += p[n * 2 + 1]; }
+  cx /= NN; cy /= NN;
+  let L = 0, I = 0;
+  for (let n = 0; n < NN; n++) {
+    const rx = p[n * 2] - cx, ry = p[n * 2 + 1] - cy;
+    const vx = p[n * 2] - pp[n * 2], vy = p[n * 2 + 1] - pp[n * 2 + 1];
+    L += rx * vy - ry * vx;
+    I += rx * rx + ry * ry;
+  }
+  if (I < 1e-6) return;
+  const w = (L / I) * k;
+  for (let n = 0; n < NN; n++) {
+    const rx = p[n * 2] - cx, ry = p[n * 2 + 1] - cy;
+    pp[n * 2] -= w * ry;
+    pp[n * 2 + 1] += w * rx;
+  }
+}
+
+function contactStatic(b) {
+  const p = b.p, pp = b.pp;
+  const rimL = dishCx - dishHalf + 4, rimR = dishCx + dishHalf - 4;
+  for (let n = 0; n < NN; n++) {
+    const i = n * 2, j = i + 1;
+    if (p[i] < rimL) {
+      const vx = p[i] - pp[i];
+      p[i] = rimL; pp[i] = rimL + vx * 0.12;
+      pp[j] = p[j] - (p[j] - pp[j]) * 0.7;
+    } else if (p[i] > rimR) {
+      const vx = p[i] - pp[i];
+      p[i] = rimR; pp[i] = rimR + vx * 0.12;
+      pp[j] = p[j] - (p[j] - pp[j]) * 0.7;
+    }
+    if (p[j] < 6) {
+      const vy = p[j] - pp[j];
+      p[j] = 6; pp[j] = 6 + vy * 0.12;
+    }
+    const fy = floorAt(p[i]);
+    if (p[j] > fy) {
+      const vy = p[j] - pp[j];
+      p[j] = fy;
+      pp[j] = fy + vy * 0.06;          // almost no bounce off the glass
+      const vx = p[i] - pp[i];
+      pp[i] = p[i] - vx * 0.42;        // dish friction
+      if (vy > 2.0) {
+        b.impact = Math.min(1, b.impact + vy * 0.012);
+        if (vy > 6 && !muted) {
+          const now = performance.now();
+          if (now - lastThud > 130) { lastThud = now; squish(Math.min(0.07, vy * 0.006), 0.62); }
+        }
+      }
+    }
+  }
+}
+
+function contactPair(A, B) {
+  pushOutOfHull(A, B);
+  pushOutOfHull(B, A);
+}
+
+function pushOutOfHull(a, hull) {
+  const p = a.p, pp = a.pp;
+  const cx = hull.cx, cy = hull.cy, R = hull.radius;
+  const R2 = R * R;
+  for (let n = 0; n < NN; n++) {
+    const x = p[n * 2], y = p[n * 2 + 1];
+    const dx = x - cx, dy = y - cy;
+    if (dx * dx + dy * dy > R2) continue;
+    if (!hull.insideHull(x, y)) continue;
+    // nearest hull edge
+    let best = 1e18, nx = 0, ny = 0, ex = 0, ey = 0;
+    for (let i = 0; i < hull.hullN; i++) {
+      const j = (i + 1) % hull.hullN;
+      const ax = hull.hull[i * 2], ay = hull.hull[i * 2 + 1];
+      const bx = hull.hull[j * 2], by = hull.hull[j * 2 + 1];
+      const abx = bx - ax, aby = by - ay;
+      const t = clamp(((x - ax) * abx + (y - ay) * aby) / (abx * abx + aby * aby + 1e-9), 0, 1);
+      const qx = ax + abx * t, qy = ay + aby * t;
+      const d = (x - qx) * (x - qx) + (y - qy) * (y - qy);
+      if (d < best) {
+        best = d;
+        const len = Math.sqrt(abx * abx + aby * aby) + 1e-9;
+        nx = -aby / len; ny = abx / len;
+        ex = qx; ey = qy;
+      }
+    }
+    if (nx * (cx - ex) + ny * (cy - ey) > 0) { nx = -nx; ny = -ny; }
+    const dist = Math.sqrt(best);
+    // push out with a little slop so points rest instead of buzzing
+    const push = Math.min(7, Math.max(0, dist - 0.8)) * 0.45 + 0.06;
+    const mx = nx * push, my = ny * push;
+    p[n * 2] += mx; p[n * 2 + 1] += my;
+    // gummy-on-gummy friction: kill the closing velocity, drag the tangent
+    let vx = p[n * 2] - pp[n * 2], vy = p[n * 2 + 1] - pp[n * 2 + 1];
+    const vn = vx * nx + vy * ny;
+    if (vn < 0) { vx -= vn * nx; vy -= vn * ny; }
+    vx *= 0.55; vy *= 0.55;
+    pp[n * 2] = p[n * 2] - vx;
+    pp[n * 2 + 1] = p[n * 2 + 1] - vy;
+  }
+}
+
+/* --------------------------- interaction -------------------------- */
+const grabs = new Map(); // pointerId -> { bear, ... }
+let grabbedBear = null;
+
+function pickBear(x, y) {
+  // topmost in draw order
+  for (let i = drawOrder.length - 1; i >= 0; i--) {
+    const b = drawOrder[i];
+    if (b.insideHull(x, y)) return b;
+  }
+  return null;
+}
+
+function startGrab(bear, x, y, id) {
+  bear.computeHull();
+  // grab nodes near the point, in world space
+  const nodes = [], weights = [];
+  for (let n = 0; n < NN; n++) {
+    const d = Math.hypot(bear.p[n * 2] - x, bear.p[n * 2 + 1] - y);
+    const rad = bear.scale * 0.52;
+    if (d < rad) {
+      nodes.push(n);
+      weights.push(1 - smooth(clamp(d / rad, 0, 1)) * 0.7);
+    }
+  }
+  if (!nodes.length) {
+    let bi = 0, bd = 1e9;
+    for (let n = 0; n < NN; n++) {
+      const d = Math.hypot(bear.p[n * 2] - x, bear.p[n * 2 + 1] - y);
+      if (d < bd) { bd = d; bi = n; }
+    }
+    nodes.push(bi); weights.push(1);
+  }
+  // local frame of the grab
+  const c = Math.cos(-bear.theta), s = Math.sin(-bear.theta);
+  const localX = (x - bear.cx) * c - (y - bear.cy) * s;
+  const localY = (x - bear.cx) * s + (y - bear.cy) * c;
+  bear.grab = {
+    id, x, y, nodes, weights,
+    localX: localX + 0, localY: localY + 0,
+    t: 0,
+  };
+  grabbedBear = bear;
+  poke(bear, x, y);
+  stage.style.cursor = 'grabbing';
+  hintEl.classList.add('gone');
+  const bi = drawOrder.indexOf(bear);
+  if (bi >= 0) { drawOrder.splice(bi, 1); drawOrder.push(bear); }
+  ping();
+}
+
+// a press dents the jelly for a moment; shape matching springs it back
+function poke(bear, x, y) {
+  const p = bear.p;
+  const rad = bear.scale * 0.46;
+  for (let n = 0; n < NN; n++) {
+    const dx = p[n * 2] - x, dy = p[n * 2 + 1] - y;
+    const d = Math.hypot(dx, dy);
+    if (d > rad) continue;
+    const w = 1 - d / rad;
+    const k = (d > 0.001 ? 1 / d : 0) * w * w * bear.scale * 0.05;
+    p[n * 2] -= dx * k;
+    p[n * 2 + 1] -= dy * k;
+  }
+  bear.computeHull();
+}
+
+function moveGrab(bear, x, y) {
+  if (!bear.grab) return;
+  bear.grab.x = x; bear.grab.y = y;
+}
+
+function releaseGrab(bear) {
+  if (!bear.grab) return;
+  bear.grab = null;
+  grabbedBear = null;
+  stage.style.cursor = '';
+}
+
+/* ------------------------------ audio ----------------------------- */
+let audioCtx = null;
+let lastThud = 0;
+let muted = false;
+function getAudio() {
+  if (audioCtx) return audioCtx;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    audioCtx = new AC();
+  } catch (e) { return null; }
+  return audioCtx;
+}
+function ping() {}
+function squish(vol = 0.12, pitch = 1) {
+  if (muted) return;
+  const ac = getAudio();
+  if (!ac) return;
+  if (ac.state === 'suspended') ac.resume();
+  const t = ac.currentTime;
+  const o = ac.createOscillator();
+  const g = ac.createGain();
+  const f = ac.createBiquadFilter();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(320 * pitch, t);
+  o.frequency.exponentialRampToValueAtTime(120 * pitch, t + 0.16);
+  f.type = 'lowpass'; f.frequency.value = 900;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+  o.connect(f); f.connect(g); g.connect(ac.destination);
+  o.start(t); o.stop(t + 0.22);
+}
+
+/* ------------------------------ input ----------------------------- */
+function localPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+}
+
+stage.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('button')) return;
+  const { x, y } = localPoint(e);
+  stage.setPointerCapture?.(e.pointerId);
+  pointer.x = x; pointer.y = y;
+  pointer.down = true; pointer.active = true; pointer.moved = false;
+  light.tx = x; light.ty = y;
+  if (grabbedBear) return;      // one hand at a time
+  const b = pickBear(x, y);
+  if (b) {
+    startGrab(b, x, y, e.pointerId);
+    stage.setPointerCapture?.(e.pointerId);
+    squish(0.1, 1.25);
+  }
+}, { passive: true });
+
+stage.addEventListener('pointermove', (e) => {
+  const { x, y } = localPoint(e);
+  const prevX = pointer.x, prevY = pointer.y;
+  pointer.x = x; pointer.y = y;
+  pointer.vx = lerp(pointer.vx, x - prevX, 0.6);
+  pointer.vy = lerp(pointer.vy, y - prevY, 0.6);
+  pointer.moved = true;
+  light.tx = x; light.ty = y;
+  if (grabbedBear && grabbedBear.grab.id === e.pointerId) moveGrab(grabbedBear, x, y);
+}, { passive: true });
+
+function endPointer(e) {
+  pointer.down = false;
+  if (grabbedBear) {
+    squish(0.09, 0.85);
+    releaseGrab(grabbedBear);
+  }
+  pointer.active = false;
+}
+stage.addEventListener('pointerup', endPointer, { passive: true });
+stage.addEventListener('pointercancel', endPointer, { passive: true });
+window.addEventListener('pointerup', endPointer, { passive: true });
+window.addEventListener('blur', () => { if (grabbedBear) releaseGrab(grabbedBear); pointer.down = false; });
+
+document.getElementById('reset').addEventListener('click', () => { resetPile(); });
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') { resetPile(); }
+});
+const soundBtn = document.getElementById('sound');
+soundBtn.addEventListener('click', () => {
+  muted = !muted;
+  soundBtn.classList.toggle('muted', muted);
+  soundBtn.setAttribute('aria-pressed', String(!muted));
+  soundBtn.setAttribute('aria-label', muted ? 'Unmute sound' : 'Mute sound');
+});
+
+function resetPile() {
+  if (grabbedBear) releaseGrab(grabbedBear);
+  pointer.down = false;
+  pointer.active = false;
+  stage.style.cursor = '';
+  layoutBears();
+  light.x = light.tx; light.y = light.ty;
+  liveEl.textContent = 'Pile reset.';
+}
+
+/* --------------------------- rendering ---------------------------- *
+ * The whole static stage (background, glass dish, caustic glow, rim,
+ * film grain, vignette) is baked once into an offscreen canvas and
+ * blitted with a single drawImage. Everything that has to move — the
+ * pointer light, contact shadows, speculars — is a pre-baked sprite.
+ * Bears are one Path2D each, reused for fill, clip and both strokes.
+ * That keeps a 1600x900 frame cheap enough to stay at 60 fps.
+ * ------------------------------------------------------------------ */
+let backdrop = null;                 // baked stage, device pixels
+const framePaths = [];               // Path2D per bear, rebuilt each frame
+const sprite = { light: null, shadow: null, spec: null };
+
+function makeCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  return c;
+}
+
+function radialSprite(size, stops) {
+  const c = makeCanvas(size, size);
+  const g = c.getContext('2d');
+  const r = size / 2;
+  const grad = g.createRadialGradient(r, r, 0, r, r, r);
+  for (const s of stops) grad.addColorStop(s[0], s[1]);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  return c;
+}
+
+function buildBackdrop() {
+  const g0 = ctx;
+
+  // ---- procedural grain tile (mixed in once, at bake time)
+  const gs = 128;
+  const tile = makeCanvas(gs, gs);
+  const tc = tile.getContext('2d');
+  const img = tc.createImageData(gs, gs);
+  const rnd = mulberry32(9182);
+  for (let i = 0; i < gs * gs; i++) {
+    const v = 128 + (rnd() - 0.5) * 90;
+    img.data[i * 4] = v; img.data[i * 4 + 1] = v; img.data[i * 4 + 2] = v;
+    img.data[i * 4 + 3] = 24;
+  }
+  tc.putImageData(img, 0, 0);
+
+  const c = makeCanvas(W * pxScale, H * pxScale);
+  const g = c.getContext('2d');
+  g.setTransform(pxScale, 0, 0, pxScale, 0, 0);
+
+  // ---- background
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#1d1330');
+  bg.addColorStop(0.55, '#150e25');
+  bg.addColorStop(1, '#0b0715');
+  g.fillStyle = bg;
+  g.fillRect(0, 0, W, H);
+
+  // ---- the dish: a shallow glass bowl the bears pile up in
+  const dishPath = () => {
+    g.beginPath();
+    g.moveTo(-10, floorAt(-10));
+    for (let x = 0; x <= W + 10; x += 8) g.lineTo(x, floorAt(x));
+  };
+  dishPath();
+  g.lineTo(W + 10, H + 10);
+  g.lineTo(-10, H + 10);
+  g.closePath();
+  const fg = g.createLinearGradient(0, floorY - 40, 0, H);
+  fg.addColorStop(0, 'rgba(58,34,74,0.55)');
+  fg.addColorStop(0.4, 'rgba(30,17,46,0.82)');
+  fg.addColorStop(1, 'rgba(9,5,18,0.98)');
+  g.fillStyle = fg;
+  g.fill();
+
+  // glow sitting in the bowl
+  const ca = g.createRadialGradient(dishCx, floorY - unit * 0.45, 0, dishCx, floorY - unit * 0.45, unit * 3.1);
+  ca.addColorStop(0, 'rgba(255,175,205,0.16)');
+  ca.addColorStop(0.45, 'rgba(255,120,170,0.06)');
+  ca.addColorStop(1, 'rgba(255,120,170,0)');
+  g.fillStyle = ca;
+  g.fillRect(0, floorY - unit * 2.4, W, unit * 3.2);
+
+  // glass rim
+  dishPath();
+  g.lineWidth = 7;
+  g.strokeStyle = 'rgba(255,205,225,0.07)';
+  g.stroke();
+  dishPath();
+  g.lineWidth = 1.6;
+  g.strokeStyle = 'rgba(255,220,235,0.30)';
+  g.stroke();
+
+  // grain
+  g.save();
+  g.globalAlpha = 0.5;
+  g.globalCompositeOperation = 'overlay';
+  g.fillStyle = tc.createPattern(tile, 'repeat');
+  g.fillRect(0, 0, W, H);
+  g.restore();
+
+  // vignette
+  const vig = g.createRadialGradient(W * 0.5, H * 0.52, Math.min(W, H) * 0.28, W * 0.5, H * 0.52, Math.max(W, H) * 0.78);
+  vig.addColorStop(0, 'rgba(6,3,12,0)');
+  vig.addColorStop(1, 'rgba(6,3,12,0.72)');
+  g.fillStyle = vig;
+  g.fillRect(0, 0, W, H);
+
+  backdrop = c;
+
+  // ---- moving sprites (baked small, blitted large)
+  // pointer light: the backlight pool plus a tighter bloom, in one sprite
+  {
+    const S = 256, r = S / 2;
+    const lc = makeCanvas(S, S);
+    const lg = lc.getContext('2d');
+    let grad = lg.createRadialGradient(r, r, 0, r, r, r);
+    grad.addColorStop(0, 'rgba(255,150,190,0.19)');
+    grad.addColorStop(0.45, 'rgba(150,80,190,0.095)');
+    grad.addColorStop(1, 'rgba(20,10,40,0)');
+    lg.fillStyle = grad;
+    lg.fillRect(0, 0, S, S);
+    grad = lg.createRadialGradient(r, r, 0, r, r, r * 0.62);
+    grad.addColorStop(0, 'rgba(255,228,242,0.11)');
+    grad.addColorStop(0.5, 'rgba(255,170,210,0.05)');
+    grad.addColorStop(1, 'rgba(255,170,210,0)');
+    lg.fillStyle = grad;
+    lg.fillRect(0, 0, S, S);
+    sprite.light = lc;
+  }
+  sprite.shadow = radialSprite(128, [
+    [0, 'rgba(6,2,14,0.62)'],
+    [0.5, 'rgba(6,2,14,0.33)'],
+    [1, 'rgba(6,2,14,0)'],
+  ]);
+  sprite.spec = radialSprite(128, [
+    [0, 'rgba(255,255,255,0.88)'],
+    [0.35, 'rgba(255,255,255,0.30)'],
+    [1, 'rgba(255,255,255,0)'],
+  ]);
+}
+
+function hsl(h, s, l, a = 1) {
+  return `hsla(${h},${clamp(s, 0, 100)}%,${clamp(l, 0, 100)}%,${a})`;
+}
+
+function drawScene(time) {
+  const g = ctx;
+  const lx = light.x, ly = light.y;
+
+  // ---- baked stage in one blit
+  if (backdrop) g.drawImage(backdrop, 0, 0, W, H);
+
+  // ---- pointer light (one sprite, covers the pool + bloom)
+  if (sprite.light) {
+    const R = Math.max(W, H) * 0.60;
+    const cy2 = ly - H * 0.06;
+    g.drawImage(sprite.light, lx - R, cy2 - R, R * 2, R * 2);
+  }
+
+  // ---- contact shadows on the glass
+  if (sprite.shadow) {
+    for (let i = 0; i < drawOrder.length; i++) {
+      const b = drawOrder[i];
+      const sy = Math.min(H, floorAt(b.cx) + 5);
+      const sx = b.cx + (lx - b.cx) * 0.02;
+      const rad = b.scale * 0.62;
+      g.setTransform(pxScale, 0, 0, pxScale * 0.34, sx * pxScale, sy * pxScale);
+      g.drawImage(sprite.shadow, -rad, -rad, rad * 2, rad * 2);
+    }
+    g.setTransform(pxScale, 0, 0, pxScale, 0, 0);
+  }
+
+  // ---- bears: one path per bear, reused for every layer
+  const n = drawOrder.length;
+  if (framePaths.length < n) framePaths.length = n;
+  for (let i = 0; i < n; i++) framePaths[i] = bearPath(drawOrder[i].p);
+  for (let i = 0; i < n; i++) drawBear(g, drawOrder[i], i, time);
+}
+
+function bearPath(p) {
+  const path = new Path2D();
+  const n = NN;
+  for (let i = 0; i < n; i++) {
+    const i0 = (i - 1 + n) % n, i2 = (i + 1) % n, i3 = (i + 2) % n;
+    const x0 = p[i0 * 2], y0 = p[i0 * 2 + 1];
+    const x1 = p[i * 2], y1 = p[i * 2 + 1];
+    const x2 = p[i2 * 2], y2 = p[i2 * 2 + 1];
+    const x3 = p[i3 * 2], y3 = p[i3 * 2 + 1];
+    if (i === 0) path.moveTo(x1, y1);
+    path.bezierCurveTo(
+      x1 + (x2 - x0) / 6, y1 + (y2 - y0) / 6,
+      x2 - (x3 - x1) / 6, y2 - (y3 - y1) / 6,
+      x2, y2
+    );
+  }
+  path.closePath();
+  return path;
+}
+
+function drawBear(g, b, order, time) {
+  const s = b.scale, col = b.c, cx = b.cx, cy = b.cy;
+  // light vector from the bear to the light
+  let ldx = light.x - cx, ldy = light.y - cy;
+  const ll = Math.hypot(ldx, ldy) || 1;
+  ldx /= ll; ldy /= ll;
+
+  const path = framePaths[order];
+
+  // ---- base body
+  const base = g.createRadialGradient(
+    cx + ldx * s * 0.28, cy + ldy * s * 0.28, s * 0.04,
+    cx + ldx * s * 0.10, cy + ldy * s * 0.10, s * 0.85
+  );
+  base.addColorStop(0, col.base0);
+  base.addColorStop(0.5, col.base1);
+  base.addColorStop(1, col.base2);
+  g.fillStyle = base;
+  g.fill(path);
+
+  g.save();
+  g.clip(path);
+
+  // ---- thick jelly core (the same path shrunk, so the candy reads solid)
+  g.save();
+  g.translate(cx, cy);
+  g.scale(0.80, 0.80);
+  g.translate(-cx, -cy);
+  const core = g.createRadialGradient(
+    cx - ldx * s * 0.18, cy - ldy * s * 0.18, s * 0.02,
+    cx - ldx * s * 0.05, cy - ldy * s * 0.05, s * 0.7
+  );
+  core.addColorStop(0, col.core0);
+  core.addColorStop(1, col.core1);
+  g.fillStyle = core;
+  g.fill(path);
+  g.restore();
+
+  // ---- see-through pass: neighbours behind the jelly add density, the way
+  //      light is filtered twice on its way through two bears
+  for (let k = 0; k < order; k++) {
+    const o = drawOrder[k];
+    const dx = o.cx - cx, dy = o.cy - cy, rr = o.radius + b.radius;
+    if (dx * dx + dy * dy > rr * rr) continue;
+    g.fillStyle = col.ghost;
+    g.fill(framePaths[k]);
+  }
+
+  // ---- subsurface glow where the light passes through
+  const sub = g.createRadialGradient(
+    cx + ldx * s * 0.26, cy + ldy * s * 0.26, 0,
+    cx + ldx * s * 0.26, cy + ldy * s * 0.26, s * 0.55
+  );
+  sub.addColorStop(0, col.sub0);
+  sub.addColorStop(0.55, col.sub1);
+  sub.addColorStop(1, col.sub2);
+  g.fillStyle = sub;
+  g.fill(path);
+
+  // ---- edge rim: light refracting at the silhouette
+  const rim = g.createLinearGradient(
+    cx + ldx * s * 0.7, cy + ldy * s * 0.7,
+    cx - ldx * s * 0.7, cy - ldy * s * 0.7
+  );
+  rim.addColorStop(0, 'rgba(255,255,255,0.62)');
+  rim.addColorStop(0.35, col.rim1);
+  rim.addColorStop(0.75, col.rim2);
+  rim.addColorStop(1, 'rgba(255,255,255,0.20)');
+  g.lineWidth = Math.max(3, s * 0.045);
+  g.strokeStyle = rim;
+  g.stroke(path);
+
+  // ---- trapped air bubbles inside the candy
+  for (let k = 0; k < b.sparkles.length; k++) {
+    const sp = b.sparkles[k];
+    g.fillStyle = `rgba(255,255,255,${sp.a * 0.55})`;
+    g.beginPath();
+    g.arc(cx + sp.x * s, cy + sp.y * s, sp.s * s, 0, TAU);
+    g.fill();
+  }
+
+  // ---- specular highlight on the lit shoulder
+  if (sprite.spec) {
+    const hx = cx + ldx * s * 0.20 - s * 0.10;
+    const hy = cy + ldy * s * 0.26 - s * 0.22;
+    const hr = s * 0.18;
+    g.drawImage(sprite.spec, hx - hr, hy - hr, hr * 2, hr * 2);
+  }
+
+  g.restore();
+
+  // ---- thin dark outline so overlapping bears stay legible
+  g.lineWidth = Math.max(1, s * 0.008);
+  g.strokeStyle = col.line;
+  g.stroke(path);
+
+  b.impact *= 0.9;
+}
+
+/* ------------------------------ loop ------------------------------ */
+let last = 0, acc = 0;
+const FIXED = 1 / 120;
+const perf = { s: 1 / 60, n: 0, cool: 0 };
+
+// Weak or software rasterisers get a slightly smaller backbuffer rather
+// than a choppy pile. Hysteresis keeps it from flapping.
+function tuneQuality(dt) {
+  perf.s += (Math.min(dt, 0.1) - perf.s) * 0.08;
+  if (perf.cool > 0) perf.cool--;
+  if (++perf.n < 100) return;
+  perf.n = 0;
+  if (perf.s > 0.0215 && quality > 0.7) {
+    quality = Math.max(0.7, quality * 0.8);
+    perf.cool = 360;
+    applySize();
+  } else if (perf.s < 0.0176 && quality < 1 && perf.cool === 0) {
+    quality = Math.min(1, quality * 1.15);
+    applySize();
+  }
+}
+
+function frame(t) {
+  const dt = Math.min(0.05, (t - last) / 1000 || 0);
+  last = t;
+  tuneQuality(dt);
+  acc += dt;
+  let iter = 0;
+  while (acc >= FIXED && iter < 4) {
+    step(FIXED);
+    acc -= FIXED;
+    iter++;
+  }
+  if (iter === 4) acc = 0;
+
+  // pointer light easing
+  if (pointer.active || pointer.down) { light.tx = pointer.x; light.ty = pointer.y; }
+  light.x = lerp(light.x, light.tx, 0.12);
+  light.y = lerp(light.y, light.ty, 0.12);
+
+  // draw order: lowest bears first, grabbed bear last
+  drawOrder.sort((a, b) => (a.cy - b.cy));
+  if (grabbedBear) {
+    const i = drawOrder.indexOf(grabbedBear);
+    if (i >= 0) { drawOrder.splice(i, 1); drawOrder.push(grabbedBear); }
+  }
+
+  drawScene(t);
+  requestAnimationFrame(frame);
+}
+
+/* ---------------------------- start up ---------------------------- */
+light.x = light.tx = window.innerWidth * 0.32;
+light.y = light.ty = window.innerHeight * 0.18;
+pointer.x = light.x; pointer.y = light.y;
+
+resize();
+window.addEventListener('resize', resize);
+window.GummyRoom = {
+  get bears() { return bears.map(b => ({ id: b.id, x: b.cx, y: b.cy, r: b.radius, theta: b.theta, grabbed: !!b.grab })); },
+  get quality() { return quality; },
+  get pxScale() { return pxScale; },
+  outline: OUTLINE,
+  reset: resetPile,
+};
+requestAnimationFrame((t) => { last = t; requestAnimationFrame(frame); });
+})();
+</script>
+</body>
+</html>

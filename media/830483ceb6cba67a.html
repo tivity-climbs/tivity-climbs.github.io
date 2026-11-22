@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Spark Rack 3D</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; width: 100%; overflow: hidden; background: #0b0b0d; color: #e8e8e8;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  #gl { position: absolute; inset: 0; display: block; cursor: crosshair; }
+  #labels { position: absolute; inset: 0; pointer-events: none; z-index: 12; }
+  #panel {
+    position: absolute; top: 16px; left: 16px; z-index: 20;
+    background: rgba(14, 14, 18, 0.94);
+    border: 1px solid #3d3d46;
+    padding: 16px 18px; border-radius: 10px;
+    width: 310px;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.5);
+  }
+  .title { font-size: 17px; font-weight: 700; letter-spacing: 0.4px; color: #ffd700;
+    margin-bottom: 8px; text-shadow: 0 0 10px rgba(255,215,0,0.35); }
+  .subtitle { font-size: 12.5px; color: #c8c8d4; margin-bottom: 12px; line-height: 1.5; }
+  .mode { font-size: 13px; margin-bottom: 10px; }
+  .mode span { font-weight: 700; }
+  .mode .ring { color: #ffd700; }
+  .mode .switch { color: #00ffff; }
+  button {
+    width: 100%; padding: 10px 14px; margin-bottom: 12px;
+    background: #1f1f26; border: 1px solid #4a4a54; color: #e8e8e8;
+    font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 6px;
+    transition: background 0.15s, border 0.15s, color 0.15s;
+    text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  button:hover { background: #2a2a32; border-color: #ffd700; color: #ffd700; }
+  button:active { background: #ffd700; color: #111; }
+  .hint { font-size: 12px; color: #8a8a96; margin-bottom: 10px; line-height: 1.5; }
+  .hint .key { color: #ffd700; font-weight: 700; }
+  .status { font-size: 12px; color: #b8b8c2; font-family: "SF Mono", Menlo, monospace; }
+</style>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+  <div id="labels"></div>
+  <div id="panel">
+    <div class="title">Spark Rack 3D</div>
+    <div class="subtitle">Four gold desktop AI nodes on a wooden rack,<br>linked by glowing data cables with flowing pulses.</div>
+    <div class="mode">Topology: <span id="modeText" class="ring">RING</span></div>
+    <button id="toggleBtn">Toggle topology</button>
+    <div class="hint"><span class="key">Drag</span> to orbit &nbsp;·&nbsp; <span class="key">Scroll</span> to zoom &nbsp;·&nbsp;
+      <span class="key">1 / 2</span> switch topology</div>
+    <div class="status" id="status">Ring &middot; 4 nodes &middot; 4 cables &middot; 8 pulses</div>
+  </div>
+  <script>
+  // ==================== 3D MATH (tiny, dependency-free) ====================
+  function mat4() { return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
+  function mat4Copy(a, out) { out.set(a); return out; }
+  function mat4Multiply(a, b, out) {
+    for (let i = 0; i < 4; i++) {
+      for (let j = 0; j < 4; j++) {
+        out[i + j*4] = a[i]*b[j*4+0] + a[i+4]*b[j*4+1] + a[i+8]*b[j*4+2] + a[i+12]*b[j*4+3];
+      }
+    }
+    return out;
+  }
+  function mat4Translate(m, v, out) {
+    out.set(m);
+    out[12] = m[0]*v[0] + m[4]*v[1] + m[8]*v[2] + m[12];
+    out[13] = m[1]*v[0] + m[5]*v[1] + m[9]*v[2] + m[13];
+    out[14] = m[2]*v[0] + m[6]*v[1] + m[10]*v[2] + m[14];
+    return out;
+  }
+  function mat4RotateX(m, a, out) {
+    const s = Math.sin(a), c = Math.cos(a);
+    out.set(m);
+    for (let i = 0; i < 4; i++) {
+      const r1 = i + 4, r2 = i + 8;
+      out[r1] = c * m[r1] - s * m[r2];
+      out[r2] = s * m[r1] + c * m[r2];
+    }
+    return out;
+  }
+  function mat4RotateY(m, a, out) {
+    const s = Math.sin(a), c = Math.cos(a);
+    out.set(m);
+    for (let i = 0; i < 4; i++) {
+      const r0 = i, r2 = i + 8;
+      out[r0] = c * m[r0] + s * m[r2];
+      out[r2] = -s * m[r0] + c * m[r2];
+    }
+    return out;
+  }
+  function mat4Perspective(fovy, aspect, near, far, out) {
+    const f = 1 / Math.tan(fovy / 2);
+    out[0] = f / aspect; out[1] = 0; out[2] = 0; out[3] = 0;
+    out[4] = 0; out[5] = f; out[6] = 0; out[7] = 0;
+    out[8] = 0; out[9] = 0; out[10] = (far + near) / (near - far); out[11] = (2 * far * near) / (near - far);
+    out[12] = 0; out[13] = 0; out[14] = -1; out[15] = 0;
+    return out;
+  }
+  function mat4LookAt(eye, center, up, out) {
+    const z = [0,0,0]; const x = [0,0,0]; const y = [0,0,0];
+    z[0] = eye[0]-center[0]; z[1] = eye[1]-center[1]; z[2] = eye[2]-center[2];
+    const lz = Math.sqrt(z[0]*z[0]+z[1]*z[1]+z[2]*z[2]);
+    z[0]/=lz; z[1]/=lz; z[2]/=lz;
+    x[0] = up[1]*z[2] - up[2]*z[1]; x[1] = up[2]*z[0] - up[0]*z[2]; x[2] = up[0]*z[1] - up[1]*z[0];
+    const lx = Math.sqrt(x[0]*x[0]+x[1]*x[1]+x[2]*x[2]);
+    x[0]/=lx; x[1]/=lx; x[2]/=lx;
+    y[0] = z[1]*x[2] - z[2]*x[1]; y[1] = z[2]*x[0] - z[0]*x[2]; y[2] = z[0]*x[1] - z[1]*x[0];
+    out[0]=x[0]; out[1]=y[0]; out[2]=z[0]; out[3]=0;
+    out[4]=x[1]; out[5]=y[1]; out[6]=z[1]; out[7]=0;
+    out[8]=x[2]; out[9]=y[2]; out[10]=z[2]; out[11]=0;
+    out[12]=-(x[0]*eye[0]+x[1]*eye[1]+x[2]*eye[2]);
+    out[13]=-(y[0]*eye[0]+y[1]*eye[1]+y[2]*eye[2]);
+    out[14]=-(z[0]*eye[0]+z[1]*eye[1]+z[2]*eye[2]);
+    out[15]=1;
+    return out;
+  }
+  function mat4Invert(a, out) {
+    const a00=a[0],a01=a[1],a02=a[2],a03=a[3], a10=a[4],a11=a[5],a12=a[6],a13=a[7],
+          a20=a[8],a21=a[9],a22=a[10],a23=a[11], a30=a[12],a31=a[13],a32=a[14],a33=a[15];
+    const det = a00*(a11*(a22*a33-a32*a23)-a21*(a12*a33-a32*a13)+a31*(a12*a23-a22*a13))
+      - a01*(a10*(a22*a33-a32*a23)-a20*(a12*a33-a32*a13)+a30*(a12*a23-a22*a13))
+      + a02*(a10*(a21*a33-a31*a23)-a20*(a11*a33-a31*a13)+a30*(a11*a23-a21*a13))
+      - a03*(a10*(a21*a32-a31*a22)-a20*(a11*a32-a31*a12)+a30*(a11*a22-a21*a12));
+    if (det === 0) return null;
+    const id = 1/det;
+    out[0] = (a11*(a22*a33-a32*a23)-a21*(a12*a33-a32*a13)+a31*(a12*a23-a22*a13))*id;
+    out[1] = -(a01*(a22*a33-a32*a23)-a21*(a02*a33-a32*a03)+a31*(a02*a23-a22*a03))*id;
+    out[2] = (a01*(a12*a33-a32*a13)-a11*(a02*a33-a32*a03)+a31*(a02*a23-a12*a03))*id;
+    out[3] = -(a01*(a12*a23-a22*a13)-a11*(a02*a23-a22*a03)+a21*(a02*a23-a12*a03))*id;
+    out[4] = -(a10*(a22*a33-a32*a23)-a20*(a12*a33-a32*a13)+a30*(a12*a23-a22*a13))*id;
+    out[5] = (a00*(a22*a33-a32*a23)-a20*(a02*a33-a32*a03)+a30*(a02*a23-a22*a03))*id;
+    out[6] = -(a00*(a12*a33-a32*a13)-a10*(a02*a33-a32*a03)+a30*(a02*a23-a12*a03))*id;
+    out[7] = (a00*(a12*a23-a22*a13)-a10*(a02*a23-a22*a03)+a20*(a02*a23-a12*a03))*id;
+    out[8] = (a10*(a21*a33-a31*a23)-a20*(a11*a33-a31*a13)+a30*(a11*a23-a21*a13))*id;
+    out[9] = -(a00*(a21*a33-a31*a23)-a20*(a01*a33-a31*a03)+a30*(a01*a23-a21*a03))*id;
+    out[10] = (a00*(a11*a33-a31*a13)-a10*(a01*a33-a31*a03)+a30*(a01*a23-a11*a03))*id;
+    out[11] = -(a00*(a11*a23-a21*a13)-a10*(a01*a23-a21*a03)+a20*(a01*a23-a11*a03))*id;
+    out[12] = -(a10*(a21*a32-a31*a22)-a20*(a11*a32-a31*a12)+a30*(a11*a22-a21*a12))*id;
+    out[13] = (a00*(a21*a32-a31*a22)-a20*(a01*a32-a31*a02)+a30*(a01*a22-a21*a02))*id;
+    out[14] = -(a00*(a11*a32-a31*a12)-a10*(a01*a32-a31*a02)+a30*(a01*a12-a11*a02))*id;
+    out[15] = (a00*(a11*a22-a21*a12)-a10*(a01*a22-a21*a02)+a20*(a01*a12-a11*a02))*id;
+    return out;
+  }
+  function mat4NormalMatrix(mv, out) {
+    const inv = mat4Invert(mv, new Float32Array(16));
+    if (!inv) { out.set(mat4()); return; }
+    out[0]=inv[0]; out[1]=inv[4]; out[2]=inv[8]; out[3]=0;
+    out[4]=inv[1]; out[5]=inv[5]; out[6]=inv[9]; out[7]=0;
+    out[8]=inv[2]; out[9]=inv[6]; out[10]=inv[10]; out[11]=0;
+    out[12]=0; out[13]=0; out[14]=0; out[15]=1;
+    return out;
+  }
+  function mat4MultiplyVec3(m, v, out) {
+    out[0] = v[0]*m[0] + v[1]*m[4] + v[2]*m[8] + m[12];
+    out[1] = v[0]*m[1] + v[1]*m[5] + v[2]*m[9] + m[13];
+    out[2] = v[0]*m[2] + v[1]*m[6] + v[2]*m[10] + m[14];
+    return out;
+  }
+  function dot(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+  function cross(a,b,out){ out[0]=a[1]*b[2]-a[2]*b[1]; out[1]=a[2]*b[0]-a[0]*b[2]; out[2]=a[0]*b[1]-a[1]*b[0]; return out; }
+  function normalize(v, out) { const l = Math.sqrt(dot(v,v)); out[0]=v[0]/l; out[1]=v[1]/l; out[2]=v[2]/l; return out; }
+  function sub(a,b,out){ out[0]=a[0]-b[0]; out[1]=a[1]-b[1]; out[2]=a[2]-b[2]; return out; }
+
+  // rotation matrix that maps local Z axis onto world direction `dir`
+  function rotMatrixFromZ(dir, out) {
+    const z = [0, 0, 1];
+    const tmp = Math.abs(dir[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+    const x = [0,0,0], y = [0,0,0];
+    cross(tmp, z, x); normalize(x, x);
+    cross(z, x, y);
+    out[0]=x[0]; out[4]=x[1]; out[8]=x[2]; out[12]=0;
+    out[1]=y[0]; out[5]=y[1]; out[9]=y[2]; out[13]=0;
+    out[2]=z[0]; out[6]=z[1]; out[10]=z[2]; out[14]=0;
+    out[3]=0; out[7]=0; out[11]=0; out[15]=1;
+    return out;
+  }
+
+  // ==================== WEBGL BOILERPLATE ====================
+  const canvas = document.getElementById('gl');
+  const gl = canvas.getContext('webgl', { alpha: false, depth: true });
+  if (!gl) { alert('WebGL is not available on this device.'); }
+
+  function compileShader(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(sh));
+      gl.deleteShader(sh);
+      return null;
+    }
+    return sh;
+  }
+  function createProgram(vsSrc, fsSrc) {
+    const vs = compileShader(gl.VERTEX_SHADER, vsSrc);
+    const fs = compileShader(gl.FRAGMENT_SHADER, fsSrc);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs); gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error('Program link error:', gl.getProgramInfoLog(prog));
+      return null;
+    }
+    return prog;
+  }
+
+  // Lit shader: diffuse + specular + emissive, optional texture, per-vertex color multiplier
+  const VS_LIT = `
+  attribute vec3 aPosition;
+  attribute vec3 aNormal;
+  attribute vec3 aColor;
+  attribute vec2 aTexCoord;
+  uniform mat4 uMVP;
+  uniform mat4 uMV;
+  uniform mat4 uNormalMatrix;
+  uniform vec3 uLightPos;
+  uniform vec3 uColor;
+  uniform float uEmissive;
+  uniform bool uUseTex;
+  varying vec3 vNormal, vLightDir;
+  varying vec3 vColor;
+  varying vec2 vTexCoord;
+  void main() {
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+    vec4 pos = uMV * vec4(aPosition, 1.0);
+    vec3 N = normalize(uNormalMatrix * vec4(aNormal, 0.0));
+    vNormal = N;
+    vLightDir = normalize(uLightPos - pos.xyz);
+    vColor = aColor;
+    vTexCoord = aTexCoord;
+  }`;
+  const FS_LIT = `
+  precision mediump float;
+  varying vec3 vNormal, vLightDir;
+  varying vec3 vColor;
+  varying vec2 vTexCoord;
+  uniform vec3 uColor;
+  uniform float uEmissive;
+  uniform bool uUseTex;
+  uniform sampler2D uTex;
+  void main() {
+    vec3 N = normalize(vNormal);
+    vec3 L = normalize(vLightDir);
+    float diff = max(dot(N, L), 0.0);
+    float spec = pow(max(dot(reflect(-L, N), normalize(-vec4(gl_Position).xyz)), 0.0), 64.0);
+    vec3 base = uColor * (0.25 + 0.70*diff + 0.40*spec);
+    base *= vColor;
+    if (uUseTex) {
+      vec3 t = texture2D(uTex, vTexCoord).rgb;
+      base = base * (0.70 + 0.30*diff) * t;
+    }
+    base += uEmissive * vec3(1.0, 0.84, 0.20);
+    gl_FragColor = vec4(base, 1.0);
+  }`;
+
+  // Pulse shader: shaded sphere, drawn additively
+  const VS_PULSE = `
+  attribute vec3 aPosition;
+  attribute vec3 aNormal;
+  uniform mat4 uMVP;
+  uniform mat4 uMV;
+  uniform mat4 uNormalMatrix;
+  uniform vec3 uLightPos;
+  varying vec3 vNormal, vLightDir;
+  void main() {
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+    vec4 pos = uMV * vec4(aPosition, 1.0);
+    vNormal = normalize(uNormalMatrix * vec4(aNormal, 0.0));
+    vLightDir = normalize(uLightPos - pos.xyz);
+  }`;
+  const FS_PULSE = `
+  precision mediump float;
+  varying vec3 vNormal, vLightDir;
+  uniform vec3 uColor;
+  uniform float uAlpha;
+  void main() {
+    float diff = max(dot(normalize(vNormal), normalize(vLightDir)), 0.0);
+    vec3 col = uColor * (0.25 + 0.75*diff);
+    gl_FragColor = vec4(col, uAlpha);
+  }`;
+
+  // Unlit glow shader for cable halos
+  const VS_GLOW = `
+  attribute vec3 aPosition;
+  uniform mat4 uMVP;
+  void main() { gl_Position = uMVP * vec4(aPosition, 1.0); }`;
+  const FS_GLOW = `
+  precision mediump float;
+  uniform vec3 uColor;
+  uniform float uAlpha;
+  void main() { gl_FragColor = vec4(uColor, uAlpha); }`;
+
+  // ==================== GEOMETRY ====================
+  function makeCube(w, h, d) {
+    const vs = [], ns = [], cs = [], tc = [];
+    const faces = [
+      {n:[0,0,1], v:[[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]]},
+      {n:[0,0,-1], v:[[-1,1,-1],[-1,-1,-1],[1,-1,-1],[1,1,-1]]},
+      {n:[1,0,0], v:[[1,-1,-1],[1,-1,1],[1,1,1],[1,1,-1]]},
+      {n:[-1,0,0], v:[[-1,1,-1],[-1,1,1],[-1,-1,1],[-1,-1,-1]]},
+      {n:[0,1,0], v:[[-1,1,-1],[1,1,-1],[1,1,1],[-1,1,1]]},
+      {n:[0,-1,0], v:[[-1,-1,1],[1,-1,1],[1,-1,-1],[-1,-1,-1]]},
+    ];
+    for (let f = 0; f < 6; f++) {
+      const front = (f === 0);
+      for (let i = 0; i < 4; i++) {
+        const v = faces[f].v[i];
+        vs.push(v[0]*w/2, v[1]*h/2, v[2]*d/2);
+        ns.push(faces[f].n[0], faces[f].n[1], faces[f].n[2]);
+        cs.push(front ? 0.5 : 1.0, front ? 0.5 : 1.0, front ? 0.5 : 1.0);
+        tc.push(i % 2, i < 2 ? 0 : 1);
+      }
+    }
+    const ib = [];
+    for (let f = 0; f < 6; f++) {
+      const base = f * 4;
+      ib.push(base, base+1, base+2, base, base+2, base+3);
+    }
+    return { vs, ns, cs, tc, ib };
+  }
+  function makeCylinder(r, h, segs) {
+    const vs = [], ns = [], tc = [], ib = [];
+    for (let i = 0; i <= segs; i++) {
+      const a = (i / segs) * Math.PI * 2;
+      const x = Math.cos(a), z = Math.sin(a);
+      vs.push(x * r, 0, z * r); ns.push(x, 0, z); tc.push(i / segs, 0);
+      vs.push(x * r, h, z * r); ns.push(x, 0, z); tc.push(i / segs, 1);
+    }
+    for (let i = 0; i < segs; i++) {
+      const a0 = 2*i, b0 = 2*i+1;
+      ib.push(a0, b0, b0+2, a0, b0+2, b0+3);
+    }
+    const topBase = 2*(segs+1);
+    vs.push(0, h, 0); ns.push(0, 1, 0); tc.push(0.5, 0.5);
+    for (let i = 0; i < segs; i++) {
+      const a = (i / segs) * Math.PI * 2, x = Math.cos(a), z = Math.sin(a);
+      vs.push(x * r, h, z * r); ns.push(0, 1, 0); tc.push((i + 1) / (2 * segs), 0.5);
+    }
+    for (let i = 0; i < segs; i++) ib.push(topBase, topBase + 1 + ((i + 1) % segs), topBase + 1 + i);
+    const botBase = topBase + 1 + segs;
+    vs.push(0, 0, 0); ns.push(0, -1, 0); tc.push(0.5, 0.5);
+    for (let i = 0; i < segs; i++) {
+      const a = (i / segs) * Math.PI * 2, x = Math.cos(a), z = Math.sin(a);
+      vs.push(x * r, 0, z * r); ns.push(0, -1, 0); tc.push((i + 1) / (2 * segs), 0.5);
+    }
+    for (let i = 0; i < segs; i++) ib.push(botBase, botBase + 1 + i, botBase + 1 + ((i + 1) % segs));
+    return { vs, ns, tc, ib };
+  }
+  function makeTube(r, length, segsAlong, segsAround) {
+    const vs = [], ns = [], tc = [], ib = [];
+    for (let s = 0; s <= segsAlong; s++) {
+      const z = (s / segsAlong) * length;
+      for (let a = 0; a <= segsAround; a++) {
+        const ang = (a / segsAround) * Math.PI * 2;
+        vs.push(Math.cos(ang) * r, Math.sin(ang) * r, z);
+        ns.push(Math.cos(ang), Math.sin(ang), 0);
+        tc.push(s / segsAlong, a / segsAround);
+      }
+    }
+    for (let s = 0; s < segsAlong; s++) {
+      for (let a = 0; a < segsAround; a++) {
+        const a0 = s * (segsAround + 1) + a;
+        const b0 = (s + 1) * (segsAround + 1) + a;
+        ib.push(a0, b0, a0 + 1, a0 + 1, b0, b0 + 1);
+      }
+    }
+    return { vs, ns, tc, ib };
+  }
+  function makeSphere(r, segs) {
+    const vs = [], ns = [], tc = [], ib = [];
+    for (let i = 0; i <= segs; i++) {
+      const phi = (i / segs) * Math.PI;
+      const y = Math.cos(phi), s = Math.sin(phi);
+      for (let j = 0; j <= segs; j++) {
+        const th = (j / segs) * Math.PI * 2;
+        vs.push(Math.sin(th) * s * r, y * r, Math.cos(th) * s * r);
+        ns.push(Math.sin(th) * s, y, Math.cos(th) * s);
+        tc.push(j / segs, i / segs);
+      }
+    }
+    for (let i = 0; i < segs; i++) {
+      for (let j = 0; j < segs; j++) {
+        const a = i * (segs + 1) + j;
+        const b = a + (segs + 1);
+        ib.push(a, b, a + 1, a + 1, b, b + 1);
+      }
+    }
+    return { vs, ns, tc, ib };
+  }
+  function makeQuad(w, h) {
+    const vs = [-w/2, -h/2, 0, w/2, -h/2, 0, w/2, h/2, 0, -w/2, h/2, 0];
+    const ns = [0,0,1, 0,0,1, 0,0,1, 0,0,1];
+    const cs = [1,1,1, 1,1,1, 1,1,1, 1,1,1];
+    const tc = [0,0, 1,0, 1,1, 0,1];
+    const ib = [0,1,2, 0,2,3];
+    return { vs, ns, cs, tc, ib };
+  }
+
+  function upload(attrs) {
+    const buf = {};
+    if (attrs.vs) { buf.v = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf.v); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(attrs.vs), gl.STATIC_DRAW); }
+    if (attrs.ns) { buf.n = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf.n); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(attrs.ns), gl.STATIC_DRAW); }
+    if (attrs.cs) { buf.c = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf.c); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(attrs.cs), gl.STATIC_DRAW); }
+    if (attrs.tc) { buf.t = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf.t); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(attrs.tc), gl.STATIC_DRAW); }
+    if (attrs.ib) { buf.i = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf.i); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(attrs.ib), gl.STATIC_DRAW); }
+    return buf;
+  }
+
+  // ---- shared geometry ----
+  const cube = makeCube(0.95, 0.55, 0.85);      // desktop AI box
+  const switchCube = makeCube(1.0, 0.6, 0.9);   // central switch box
+  const cyl = makeCylinder(0.08, 0.22, 12);     // antenna
+  const sphere = makeSphere(1, 16);             // pulse
+  const quad = makeQuad(1.6, 1.35);             // shadow ellipse
+  const plane = makeQuad(12, 12);               // tabletop
+  const slab = makeQuad(12, 0.3);               // table edge
+  const geo = { plane, slab, quad, cube, cyl, sphere, switchCube };
+
+  // ---- procedural wood texture (code-generated, no assets) ----
+  function makeWoodCanvas() {
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 512;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#3b2816'; ctx.fillRect(0, 0, 512, 512);
+    for (let i = 0; i < 90; i++) {
+      const x = (Math.random() * 65) * 512;
+      const w = (Math.random() * 75 + 90);
+      const a = Math.random() * 0.28 + 0.08;
+      ctx.fillStyle = `rgba(${Math.random() * 55 + 95}, ${Math.random() * 32 + 22}, ${Math.random() * 22 + 12}, ${a})`;
+      ctx.fillRect(x, 0, w, 512);
+      ctx.fillStyle = `rgba(${Math.random() * 35}, ${Math.random() * 18}, 0, ${Math.random() * 0.18})`;
+      ctx.fillRect(x + Math.random() * 55, 0, Math.random() * 40, 512);
+    }
+    for (let i = 0; i < 18; i++) {
+      const cx = Math.random() * 512, cy = Math.random() * 512;
+      const r = Math.random() * 24 + 10;
+      const a = Math.random() * 0.4 + 0.12;
+      ctx.fillStyle = `rgba(${Math.random() * 65 + 100}, ${Math.random() * 35 + 25}, ${Math.random() * 25}, ${a})`;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    }
+    const img = ctx.getImageData(0, 0, 512, 512);
+    for (let i = 0; i < img.data.length; i += 4) {
+      img.data[i] += (Math.random() - 0.5) * 16;
+      img.data[i + 1] += (Math.random() - 0.5) * 16;
+      img.data[i + 2] += (Math.random() - 0.5) * 16;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+  const woodCanvas = makeWoodCanvas();
+  const woodTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, woodTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, 512, 512, gl.UNSIGNED_BYTE, woodCanvas);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+
+  // ==================== SHADERS & LOCATIONS ====================
+  const progLit = createProgram(VS_LIT, FS_LIT);
+  const progPulse = createProgram(VS_PULSE, FS_PULSE);
+  const progGlow = createProgram(VS_GLOW, FS_GLOW);
+
+  const locLit = {
+    pos: gl.getAttribLocation(progLit, 'aPosition'),
+    nor: gl.getAttribLocation(progLit, 'aNormal'),
+    col: gl.getAttribLocation(progLit, 'aColor'),
+    tex: gl.getAttribLocation(progLit, 'aTexCoord'),
+    mvp: gl.getUniformLocation(progLit, 'uMVP'),
+    mv: gl.getUniformLocation(progLit, 'uMV'),
+    nm: gl.getUniformLocation(progLit, 'uNormalMatrix'),
+    lp: gl.getUniformLocation(progLit, 'uLightPos'),
+    color: gl.getUniformLocation(progLit, 'uColor'),
+    emissive: gl.getUniformLocation(progLit, 'uEmissive'),
+    useTex: gl.getUniformLocation(progLit, 'uUseTex'),
+    sampler: gl.getUniformLocation(progLit, 'uTex'),
+  };
+  const locPulse = {
+    pos: gl.getAttribLocation(progPulse, 'aPosition'),
+    nor: gl.getAttribLocation(progPulse, 'aNormal'),
+    mvp: gl.getUniformLocation(progPulse, 'uMVP'),
+    mv: gl.getUniformLocation(progPulse, 'uMV'),
+    nm: gl.getUniformLocation(progPulse, 'uNormalMatrix'),
+    lp: gl.getUniformLocation(progPulse, 'uLightPos'),
+    color: gl.getUniformLocation(progPulse, 'uColor'),
+    alpha: gl.getUniformLocation(progPulse, 'uAlpha'),
+  };
+  const locGlow = {
+    pos: gl.getAttribLocation(progGlow, 'aPosition'),
+    mvp: gl.getUniformLocation(progGlow, 'uMVP'),
+    color: gl.getUniformLocation(progGlow, 'uColor'),
+    alpha: gl.getUniformLocation(progGlow, 'uAlpha'),
+  };
+
+  function setAttribs(loc, buf) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf.v);
+    if (loc.pos !== -1) { gl.enableVertexAttribArray(loc.pos); gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 0, 0); }
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf.n);
+    if (loc.nor !== -1) { gl.enableVertexAttribArray(loc.nor); gl.vertexAttribPointer(loc.nor, 3, gl.FLOAT, false, 0, 0); }
+    if (loc.col !== -1) { gl.bindBuffer(gl.ARRAY_BUFFER, buf.c); gl.enableVertexAttribArray(loc.col); gl.vertexAttribPointer(loc.col, 3, gl.FLOAT, false, 0, 0); }
+    if (loc.tex !== -1) { gl.bindBuffer(gl.ARRAY_BUFFER, buf.t); gl.enableVertexAttribArray(loc.tex); gl.vertexAttribPointer(loc.tex, 2, gl.FLOAT, false, 0, 0); }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf.i);
+  }
+
+  function drawLit(buf, color, emissive, useTex, model, view, proj, lightView) {
+    gl.useProgram(progLit);
+    setAttribs(locLit, buf);
+    const mv = mat4Multiply(view, model, mat4());
+    const mvp = mat4Multiply(proj, mv, mat4());
+    const nm = mat4NormalMatrix(mv, mat4());
+    gl.uniformMatrix4fv(locLit.mvp, false, mvp);
+    gl.uniformMatrix4fv(locLit.mv, false, mv);
+    gl.uniformMatrix4fv(locLit.nm, false, nm);
+    gl.uniform3f(locLit.lp, lightView[0], lightView[1], lightView[2]);
+    gl.uniform3f(locLit.color, color[0], color[1], color[2]);
+    gl.uniform1f(locLit.emissive, emissive);
+    gl.uniform1i(locLit.useTex, useTex ? 1 : 0);
+    if (useTex) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, woodTex);
+      gl.uniform1i(locLit.sampler, 0);
+    }
+    gl.drawElements(gl.TRIANGLES, buf.ib.length, gl.UNSIGNED_SHORT, 0);
+  }
+
+  function drawGlow(buf, model, view, proj, color, alpha) {
+    gl.useProgram(progGlow);
+    setAttribs(locGlow, buf);
+    const mv = mat4Multiply(view, model, mat4());
+    const mvp = mat4Multiply(proj, mv, mat4());
+    gl.uniformMatrix4fv(locGlow.mvp, false, mvp);
+    gl.uniform3f(locGlow.color, color[0], color[1], color[2]);
+    gl.uniform1f(locGlow.alpha, alpha);
+    gl.drawElements(gl.TRIANGLES, buf.ib.length, gl.UNSIGNED_SHORT, 0);
+  }
+
+  function drawPulse(buf, model, view, proj, lightView, color, alpha) {
+    gl.useProgram(progPulse);
+    setAttribs(locPulse, buf);
+    const mv = mat4Multiply(view, model, mat4());
+    const mvp = mat4Multiply(proj, mv, mat4());
+    const nm = mat4NormalMatrix(mv, mat4());
+    gl.uniformMatrix4fv(locPulse.mvp, false, mvp);
+    gl.uniformMatrix4fv(locPulse.mv, false, mv);
+    gl.uniformMatrix4fv(locPulse.nm, false, nm);
+    gl.uniform3f(locPulse.lp, lightView[0], lightView[1], lightView[2]);
+    gl.uniform3f(locPulse.color, color[0], color[1], color[2]);
+    gl.uniform1f(locPulse.alpha, alpha);
+    gl.drawElements(gl.TRIANGLES, buf.ib.length, gl.UNSIGNED_SHORT, 0);
+  }
+
+  // ==================== SCENE STATE ====================
+  const state = {
+    mode: 'ring',
+    yaw: 0.0,
+    pitch: 0.4,
+    radius: 5.6,
+    pulses: [],
+    cables: [],
+    boxes: [],
+    center: [0, 0.275, 0],
+    tube: null,
+    tubeBuf: null,
+  };
+
+  function buildScene() {
+    state.cables = [];
+    state.boxes = [];
+    const r = 2.7;
+    const boxY = 0.275;
+    for (let i = 0; i < 4; i++) {
+      const ang = i * Math.PI / 2;
+      const x = r * Math.sin(ang), z = r * Math.cos(ang);
+      state.boxes.push({ x, z, ang });
+      if (state.mode === 'ring') {
+        const j = (i + 1) % 4;
+        const aj = j * Math.PI / 2;
+        state.cables.push({ p0: [x, boxY, z], p1: [r * Math.sin(aj), boxY, r * Math.cos(aj)] });
+      } else {
+        if (i % 2 === 0) {
+          state.cables.push({ p0: [x, boxY, z], p1: [0, boxY, 0] });      // node -> switch
+        } else {
+          state.cables.push({ p0: [0, boxY, 0], p1: [x, boxY, z] });      // switch -> node
+        }
+      }
+    }
+    const dist = state.mode === 'ring' ? r * Math.sqrt(2) : r;
+    state.tube = makeTube(0.12, 0.95 * dist, 8, 10);
+    state.tubeBuf = upload(state.tube);
+    state.pulses = [];
+    for (let c = 0; c < state.cables.length; c++) {
+      for (let p = 0; p < 2; p++) {
+        state.pulses.push({
+          cable: c,
+          t: ((p + 0.5) / 2) + (Math.random() - 0.5) * 0.25,
+          speed: 0.42 + Math.random() * 0.28,
+        });
+      }
+    }
+  }
+  buildScene();
+
+  // ==================== INPUT ====================
+  let isDragging = false, dragStart = { x: 0, y: 0 };
+  canvas.addEventListener('pointerdown', (e) => {
+    isDragging = true;
+    canvas.setPointerCapture(e.pointerId);
+    dragStart = { x: e.clientX, y: e.clientY };
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!isDragging) return;
+    state.yaw += (e.clientX - dragStart.x) * 0.0012;
+    state.pitch += (e.clientY - dragStart.y) * 0.0012;
+    dragStart = { x: e.clientX, y: e.clientY };
+  });
+  window.addEventListener('pointerup', () => {
+    isDragging = false;
+    canvas.setPointerCapture(null);
+  });
+  canvas.addEventListener('pointercancel', () => {
+    isDragging = false;
+    canvas.setPointerCapture(null);
+  });
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    state.radius *= (1 + e.deltaY * 0.003);
+    state.radius = Math.min(Math.max(state.radius, 2.5), 9);
+  });
+  canvas.style.touchAction = 'none';
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Digit1') { state.mode = 'ring'; applyMode(); }
+    if (e.code === 'Digit2') { state.mode = 'switch'; applyMode(); }
+    if (e.code === 'R') { state.yaw = 0; state.pitch = 0.4; state.radius = 5.6; }
+  });
+
+  const btn = document.getElementById('toggleBtn');
+  const modeText = document.getElementById('modeText');
+  const statusEl = document.getElementById('status');
+  function applyMode() {
+    modeText.textContent = state.mode === 'ring' ? 'RING' : 'SWITCH';
+    modeText.className = state.mode === 'ring' ? 'ring' : 'switch';
+    buildScene();
+    statusEl.textContent = state.mode === 'ring'
+      ? 'Ring &middot; 4 nodes &middot; 4 cables &middot; 8 pulses'
+      : 'Switch &middot; 4 nodes &middot; 4 uplinks &middot; 8 pulses';
+  }
+  btn.addEventListener('click', () => {
+    state.mode = state.mode === 'ring' ? 'switch' : 'ring';
+    applyMode();
+  });
+
+  // ==================== LABELS (2D overlay, projected from 3D) ====================
+  const labelCanvas = document.createElement('canvas');
+  labelCanvas.style.position = 'absolute';
+  labelCanvas.style.inset = '0';
+  labelCanvas.style.pointerEvents = 'none';
+  document.getElementById('labels').appendChild(labelCanvas);
+
+  function project(mvp, pos) {
+    const m = mvp;
+    const x = pos[0]*m[0] + pos[1]*m[4] + pos[2]*m[8] + m[12];
+    const y = pos[0]*m[1] + pos[1]*m[5] + pos[2]*m[9] + m[13];
+    const z = pos[0]*m[2] + pos[1]*m[6] + pos[2]*m[10] + m[14];
+    const w = pos[0]*m[3] + pos[1]*m[7] + pos[2]*m[11] + m[15];
+    if (w <= 0) return null;
+    const nx = x / w, ny = y / w;
+    return { x: (nx + 1) / 2, y: (1 - ny) / 2, z: z / w };
+  }
+
+  function drawLabels(mvp) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    labelCanvas.width = w * dpr; labelCanvas.height = h * dpr;
+    labelCanvas.style.width = w + 'px'; labelCanvas.style.height = h + 'px';
+    const ctx = labelCanvas.getContext('2d');
+    ctx.clearRect(0, 0, w * dpr, h * dpr);
+    ctx.font = (13 * dpr) + 'px -apple-system, system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    const items = [];
+    state.boxes.forEach((b, i) => items.push({ pos: [b.x, 0.275 + 0.30, b.z], text: 'Node ' + (i + 1) }));
+    if (state.mode === 'switch') items.push({ pos: [0, 0.275 + 0.42, 0], text: 'Switch' });
+    for (const it of items) {
+      const p = project(mvp, it.pos);
+      if (!p || p.z >= 0) continue;
+      const px = p.x * w * dpr, py = p.y * h * dpr;
+      ctx.fillStyle = 'rgba(10, 10, 12, 0.82)';
+      ctx.fillRect(px - 32 * dpr, py - 12 * dpr, 64 * dpr, 24 * dpr);
+      ctx.fillStyle = '#e8e8e8';
+      ctx.shadowColor = 'rgba(0,0,0,0.95)';
+      ctx.shadowBlur = 10 * dpr;
+      ctx.fillText(it.text, px, py);
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  // ==================== RESIZE ====================
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ==================== RENDER LOOP ====================
+  const GOLD = [0.92, 0.76, 0.20];
+  const BRONZE = [0.68, 0.50, 0.10];
+  const SILVER = [0.85, 0.90, 0.95];
+  const lightWorld = [3, 6, 4];
+  let lastTime = performance.now();
+
+  function animate() {
+    const now = performance.now();
+    let dt = (now - lastTime) / 1000;
+    if (dt > 0.05) dt = 0.05;
+    lastTime = now;
+
+    state.pitch = Math.min(Math.max(state.pitch, -1.42), 1.42);
+
+    // animate pulses along cables
+    for (const p of state.pulses) {
+      p.t += p.speed * dt;
+      if (p.t >= 1.0) p.t -= 1.0;
+    }
+
+    // camera
+    const cp = Math.cos(state.pitch), sp = Math.sin(state.pitch);
+    const eye = [
+      state.center[0] + state.radius * Math.sin(state.yaw) * cp,
+      state.center[1] + state.radius * sp,
+      state.center[2] + state.radius * Math.cos(state.yaw) * cp,
+    ];
+    const view = mat4LookAt(eye, state.center, [0, 1, 0], mat4());
+    const proj = mat4Perspective(Math.PI / 3, canvas.width / canvas.height, 0.1, 100, mat4());
+    const mvp = mat4Multiply(proj, view, mat4());
+    const lightView = mat4MultiplyVec3(view, lightWorld, [0, 0, 0]);
+
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0.05, 0.05, 0.06, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+
+    // ---------- opaque pass ----------
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+
+    // tabletop (wood texture)
+    drawLit(geo.plane, [1, 1, 1], 0, true, mat4Translate(mat4(), [0, 0, 0], mat4()), view, proj, lightView);
+    // table edge/slab
+    drawLit(geo.slab, [0.15, 0.105, 0.075], 0, false, mat4Translate(mat4(), [0, -0.15, 0], mat4()), view, proj, lightView);
+
+    // drop shadows under each node
+    state.boxes.forEach(b => {
+      const m = mat4RotateX(mat4(), -Math.PI / 2, mat4());
+      mat4Translate(m, [b.x, 0.012, b.z], m);
+      drawLit(geo.quad, [0.03, 0.03, 0.04], 0, false, m, view, proj, lightView);
+    });
+
+    // nodes + antennas
+    state.boxes.forEach((b, i) => {
+      const hover = 0.028 * Math.sin(now * 0.002 + i);
+      const spin = now * 0.0014 + i * 0.6;
+      const m = mat4Translate(mat4(), [b.x, 0.275 + hover, b.z], mat4());
+      mat4RotateY(m, spin, m);
+      drawLit(geo.cube, GOLD, 0.14, false, m, view, proj, lightView);
+      const ant = mat4RotateX(mat4(), -Math.PI / 2, mat4());
+      mat4Translate(ant, [0, 0.275 + hover + 0.55 / 2 + 0.1, 0], ant);
+      const am = mat4Multiply(m, ant, mat4());
+      drawLit(geo.cyl, BRONZE, 0.18, false, am, view, proj, lightView);
+    });
+
+    // central switch box
+    if (state.mode === 'switch') {
+      const m = mat4Translate(mat4(), [0, 0.275, 0], mat4());
+      mat4RotateY(m, now * 0.0009 * 0.7, m);
+      const s = mat4(); s[0] = 1.05; s[5] = 1; s[10] = 1.05;
+      mat4Multiply(m, s, m);
+      drawLit(geo.switchCube, SILVER, 0.09, false, m, view, proj, lightView);
+    }
+
+    // glowing cables
+    const cableColor = [0.96, 0.82, 0.28];
+    for (const c of state.cables) {
+      const dir = [c.p1[0] - c.p0[0], c.p1[1] - c.p0[1], c.p1[2] - c.p0[2]];
+      const len = Math.sqrt(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
+      const d = [dir[0]/len, dir[1]/len, dir[2]/len];
+      const r = rotMatrixFromZ(d, mat4());
+      const t = mat4Translate(mat4(), c.p0, mat4());
+      const model = mat4Multiply(t, r, mat4());
+      drawLit(state.tubeBuf, cableColor, 0.52, false, model, view, proj, lightView);
+      // glow halo (additive pass later)
+      const s = mat4(); s[0] = 1.16; s[5] = 1.16; s[10] = 1;
+      const halo = mat4Multiply(model, s, mat4());
+      // store for glow pass
+      if (!c.halo) c.halo = halo;
+      else mat4Copy(halo, c.halo);
+    }
+
+    // ---------- additive glow pass ----------
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+    gl.depthMask(false);
+    gl.depthFunc(gl.LEQUAL);
+
+    // cable halos
+    for (const c of state.cables) {
+      drawGlow(state.tubeBuf, c.halo, view, proj, [1, 1, 1], 0.07);
+    }
+
+    // data pulses
+    for (const p of state.pulses) {
+      const c = state.cables[p.cable];
+      const px = c.p0[0] + p.t * (c.p1[0] - c.p0[0]);
+      const py = c.p0[1] + p.t * (c.p1[1] - c.p0[1]);
+      const pz = c.p0[2] + p.t * (c.p1[2] - c.p0[2]);
+      const pm = mat4Translate(mat4(), [px, py, pz], mat4());
+      const sc = mat4(); sc[0] = 0.13; sc[5] = 0.13; sc[10] = 0.13;
+      mat4Multiply(sc, pm, pm);
+      drawPulse(geo.sphere, pm, view, proj, lightView, [1, 0.96, 0.72], 1.0);
+    }
+
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+
+    // ---------- labels overlay ----------
+    drawLabels(mvp);
+
+    requestAnimationFrame(animate);
+  }
+  animate();
+  </script>
+</body>
+</html>

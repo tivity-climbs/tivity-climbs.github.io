@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#121316">
+<title>Six Sparks · Blind Judgement</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' rx='20' fill='%23ceff63'/%3E%3Cpath d='M44 8L20 44h18l-4 28 26-40H42z' fill='%23121316'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer>
+</script>
+</head>
+<body>
+<header>
+<a class="brand" href="./index.html" aria-label="Six Sparks home">
+<span class="bolt">ϟ</span> SIX SPARKS <span class="edition">THE BLIND TEST</span>
+</a>
+<div class="header-right">
+<span id="saved">SAVED ON THIS DEVICE</span>
+<button id="reset" class="quiet">Start fresh ↺</button>
+</div>
+</header>
+<main>
+<section class="intro">
+<div>
+<p class="eyebrow">NO LOGOS. NO PRICE TAGS. JUST THE OUTPUT.</p>
+<h1>Good taste.<br>
+<span>Blind judgement.</span>
+</h1>
+<p class="lede">Eight AI setups. The same six tasks. Watch, play, and rank what they made.<br class="desktop"> Then find out who you just put in F tier.</p>
+</div>
+<div class="intro-mark" aria-hidden="true">
+<span>?</span>
+<small>TRUST YOUR EYES</small>
+<i>✳</i>
+</div>
+</section>
+<nav id="tests" aria-label="Benchmark tasks">
+</nav>
+<section class="round-header">
+<div>
+<p class="eyebrow" id="round-number">
+</p>
+<h2 id="round-title">Loading the contenders…</h2>
+<p id="prompt">
+</p>
+</div>
+<button id="play-all" class="secondary">Play all six ↗</button>
+</section>
+<div class="workspace">
+<section class="contenders" aria-label="Unranked contenders">
+<div class="section-label">
+<h3>The contenders <span id="unranked-count">
+</span>
+</h3>
+<span>CLICK TO WATCH / PLAY</span>
+</div>
+<div id="pool" class="pool" data-tier="unranked">
+</div>
+<div class="coming">
+<span class="mini-bolt">ϟ ϟ ϟ ϟ ϟ ϟ</span>
+<div>
+<strong>6 Sparks</strong>
+<span>Still cooking. Coming soon.</span>
+</div>
+<span class="pending-dot">
+</span>
+</div>
+</section>
+<section class="ranking" aria-label="Tier list">
+<div class="section-label">
+<h3>Your verdict <span id="rank-count">
+</span>
+</h3>
+<span>DRAG OR USE “RANK”</span>
+</div>
+<div id="tiers">
+</div>
+<div class="reveal-panel">
+<div>
+<strong id="reveal-title">Put your taste on the line.</strong>
+<p id="reveal-note">Rank all eight to unlock the reveal.</p>
+</div>
+<button id="reveal" class="primary" disabled>REVEAL <span>↗</span>
+</button>
+</div>
+<button id="next" class="next" hidden>
+</button>
+</section>
+</div>
+<section id="summary" hidden aria-labelledby="summary-title">
+</section>
+<footer>
+<span>SIX SPARKS / THE OUTPUT DOES THE TALKING.</span>
+<span>Blind letters reshuffle for each task. No account. No leaderboard. Just you.</span>
+</footer>
+<p id="status" role="status" class="sr-only" aria-live="polite">
+</p>
+</main>
+<dialog id="viewer">
+<div class="viewer-header">
+<div>
+<span id="viewer-label">
+</span>
+<span id="viewer-detail">
+</span>
+</div>
+<button id="close-viewer" aria-label="Close viewer">✕</button>
+</div>
+<div id="stage">
+</div>
+<div class="viewer-footer">
+<span id="viewer-help">Try it. Break it. Trust your eyes.</span>
+<label>YOUR TIER <select id="viewer-rank" aria-label="Rank this contender">
+</select>
+</label>
+</div>
+</dialog>
+<dialog id="reset-dialog">
+<form method="dialog">
+<p class="eyebrow">A CLEAN SLATE</p>
+<h2>New blind session?</h2>
+<p>Clear all six tasks and reshuffle the letters. This cannot be undone.</p>
+<div class="reset-actions">
+<button value="cancel" class="secondary">Keep my picks</button>
+<button id="confirm-reset" value="reset" class="primary">Start fresh</button>
+</div>
+</form>
+</dialog>
+</body>
+</html>

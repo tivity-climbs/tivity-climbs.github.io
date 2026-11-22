@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Spark Rack 3D — Gold AI Boxes on a Wooden Table</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#0b0e14;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  #stage { position:fixed; inset:0; }
+  #gl, #ui { position:absolute; inset:0; width:100%; height:100%; display:block; }
+  #gl { touch-action:none; cursor:grab; }
+  #gl.dragging { cursor:grabbing; }
+  #ui { pointer-events:none; }
+  #vignette { position:absolute; inset:0; pointer-events:none;
+    background: radial-gradient(ellipse at 50% 42%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.5) 100%); }
+  .hud { position:absolute; color:#cfd6e4; pointer-events:none; text-shadow:0 1px 3px rgba(0,0,0,.7); }
+  #title { top:18px; left:22px; font-size:15px; font-weight:600; letter-spacing:.22em; color:#ffd98a; }
+  #title small { display:block; margin-top:4px; font-size:10.5px; font-weight:400; letter-spacing:.14em; color:#8b94a7; }
+  #hint { bottom:16px; left:22px; font-size:11.5px; letter-spacing:.05em; color:#8b94a7; }
+  #status { bottom:16px; right:22px; font-size:11.5px; letter-spacing:.05em; color:#8b94a7; text-align:right; }
+  #status b { color:#7de3ff; font-weight:600; }
+  #controls { position:absolute; top:16px; right:20px; pointer-events:auto; }
+  #topoBtn {
+    appearance:none; border:1px solid rgba(255,217,138,.45); color:#ffd98a;
+    background:linear-gradient(180deg, rgba(40,32,16,.85), rgba(18,15,8,.85));
+    font: 600 12px/1 ui-sans-serif, system-ui, sans-serif; letter-spacing:.14em;
+    padding:11px 16px; border-radius:9px; cursor:pointer; display:flex; align-items:center; gap:9px;
+    box-shadow:0 2px 10px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.07);
+    transition: border-color .2s, box-shadow .2s;
+  }
+  #topoBtn:hover { border-color:rgba(255,217,138,.85); box-shadow:0 2px 16px rgba(255,190,80,.25), inset 0 1px 0 rgba(255,255,255,.1); }
+  #topoBtn:focus-visible { outline:2px solid #ffd98a; outline-offset:2px; }
+  #topoBtn .pip { width:8px; height:8px; border-radius:50%; background:#7de3ff; box-shadow:0 0 8px #7de3ff; }
+  #fallback { position:absolute; inset:0; display:none; place-items:center; color:#cfd6e4; font-size:14px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="gl" aria-label="3D scene: four gold AI boxes on a wooden table connected by glowing cables. Drag to orbit."></canvas>
+  <canvas id="ui"></canvas>
+  <div id="vignette"></div>
+  <div id="title" class="hud">SPARK RACK · 3D<small>four gold AI boxes · glowing data links</small></div>
+  <div id="hint" class="hud">drag to orbit &nbsp;·&nbsp; scroll / pinch to zoom &nbsp;·&nbsp; press T to toggle topology</div>
+  <div id="status" class="hud">topology <b id="statusMode">RING</b> &nbsp;·&nbsp; <span id="statusLinks">4 links</span></div>
+  <div id="controls">
+    <button id="topoBtn" aria-label="Toggle topology between ring and switch" title="Toggle topology (T)">
+      <span class="pip" aria-hidden="true"></span><span id="topoBtnText">TOPOLOGY · RING</span>
+    </button>
+  </div>
+  <div id="fallback">WebGL is not available in this browser.</div>
+</div>
+<script>
+"use strict";
+/* ============================================================
+   Spark Rack 3D — raw WebGL, zero dependencies.
+   Four gold AI boxes on a wooden table, glowing cables with
+   data pulses; RING <-> SWITCH topology re-routing.
+   ============================================================ */
+
+const glCanvas = document.getElementById('gl');
+const uiCanvas = document.getElementById('ui');
+const gl = glCanvas.getContext('webgl', { antialias:true, alpha:false });
+if (!gl) { document.getElementById('fallback').style.display = 'grid'; throw new Error('no webgl'); }
+
+/* ---------------- small math (column-major mat4) ---------------- */
+function m4mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0; for (let k = 0; k < 4; k++) s += a[k*4+r] * b[c*4+k];
+    o[c*4+r] = s;
+  }
+  return o;
+}
+function m4persp(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return new Float32Array([f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0]);
+}
+function v3sub(a,b){ return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function v3cross(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function v3dot(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function v3norm(a){ const l = Math.hypot(a[0],a[1],a[2]) || 1; return [a[0]/l, a[1]/l, a[2]/l]; }
+function m4lookAt(eye, tgt, up) {
+  const z = v3norm(v3sub(eye, tgt));
+  const x = v3norm(v3cross(up, z));
+  const y = v3cross(z, x);
+  // column-major view matrix: rows of the matrix are the camera basis
+  return new Float32Array([
+    x[0], y[0], z[0], 0,
+    x[1], y[1], z[1], 0,
+    x[2], y[2], z[2], 0,
+    -v3dot(x,eye), -v3dot(y,eye), -v3dot(z,eye), 1
+  ]);
+}
+function m4trs(tx,ty,tz, sx,sy,sz) {
+  return new Float32Array([sx,0,0,0, 0,sy,0,0, 0,0,sz,0, tx,ty,tz,1]);
+}
+function xform(m, p) { // p is [x,y,z]
+  return [
+    m[0]*p[0] + m[4]*p[1] + m[8]*p[2]  + m[12],
+    m[1]*p[0] + m[5]*p[1] + m[9]*p[2]  + m[13],
+    m[2]*p[0] + m[6]*p[1] + m[10]*p[2] + m[14],
+    m[3]*p[0] + m[7]*p[1] + m[11]*p[2] + m[15]
+  ];
+}
+const clamp = (v,a,b) => Math.min(b, Math.max(a, v));
+const smooth = t => t*t*(3-2*t);
+const lerp = (a,b,t) => a + (b-a)*t;
+
+/* ---------------- shader helpers ---------------- */
+function makeProgram(vsSrc, fsSrc, name) {
+  function sh(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+      throw new Error(name + ' shader: ' + gl.getShaderInfoLog(s));
+    return s;
+  }
+  const p = gl.createProgram();
+  gl.attachShader(p, sh(gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fsSrc));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    throw new Error(name + ' link: ' + gl.getProgramInfoLog(p));
+  const u = {}, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); u[info.name] = gl.getUniformLocation(p, info.name); }
+  return { p, u };
+}
+
+/* ---------------- shaders ---------------- */
+const meshProg = makeProgram(`
+  attribute vec3 aPos; attribute vec3 aNormal; attribute vec2 aUV;
+  uniform mat4 uModel, uVP;
+  varying vec3 vN; varying vec3 vW; varying vec2 vUV;
+  void main(){
+    vec4 w = uModel * vec4(aPos, 1.0);
+    vW = w.xyz; vN = aNormal; vUV = aUV;
+    gl_Position = uVP * w;
+  }`, `
+  precision mediump float;
+  varying vec3 vN; varying vec3 vW; varying vec2 vUV;
+  uniform vec3 uColor; uniform vec3 uEmissive; uniform float uSpec; uniform float uShin;
+  uniform sampler2D uTex; uniform float uUseTex; uniform vec3 uEye;
+  void main(){
+    vec3 albedo = uColor;
+    if (uUseTex > 0.5) albedo *= texture2D(uTex, vUV).rgb;
+    vec3 N = normalize(vN);
+    vec3 V = normalize(uEye - vW);
+    vec3 L1 = normalize(vec3(0.45, 0.85, 0.5));
+    vec3 L2 = normalize(vec3(-0.6, 0.35, -0.55));
+    float d1 = max(dot(N, L1), 0.0);
+    float d2 = max(dot(N, L2), 0.0);
+    vec3 H1 = normalize(L1 + V);
+    vec3 H2 = normalize(L2 + V);
+    float s1 = pow(max(dot(N, H1), 0.0), uShin) * uSpec;
+    float s2 = pow(max(dot(N, H2), 0.0), uShin) * uSpec * 0.4;
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.25;
+    vec3 warm = vec3(1.0, 0.86, 0.62);
+    vec3 cool = vec3(0.55, 0.65, 0.85);
+    vec3 lit = albedo * (0.22 + d1 * warm + d2 * cool * 0.5)
+             + warm * s1 + cool * s2 + albedo * fres;
+    gl_FragColor = vec4(lit + uEmissive, 1.0);
+  }`, 'mesh');
+
+const cableProg = makeProgram(`
+  attribute vec3 aPos; attribute vec3 aNormal; attribute float aFrac;
+  uniform mat4 uVP; uniform float uRadius;
+  varying float vFrac;
+  void main(){
+    vFrac = aFrac;
+    gl_Position = uVP * vec4(aPos + aNormal * uRadius, 1.0);
+  }`, `
+  precision mediump float;
+  varying float vFrac;
+  uniform vec3 uColor; uniform float uAlpha; uniform float uGlow;
+  void main(){
+    // brighten near the middle of the run, taper at ports
+    float taper = smoothstep(0.0, 0.12, vFrac) * smoothstep(1.0, 0.88, vFrac);
+    vec3 c = uColor * (0.75 + 0.5 * taper + uGlow);
+    gl_FragColor = vec4(c, uAlpha * (0.55 + 0.45 * taper));
+  }`, 'cable');
+
+const pulseProg = makeProgram(`
+  attribute vec3 aPos;
+  uniform mat4 uVP; uniform float uSize;
+  void main(){
+    vec4 clip = uVP * vec4(aPos, 1.0);
+    gl_Position = clip;
+    gl_PointSize = clamp(uSize / max(clip.w, 0.4), 2.0, 64.0);
+  }`, `
+  precision mediump float;
+  uniform vec3 uColor; uniform float uAlpha;
+  void main(){
+    float d = length(gl_PointCoord - vec2(0.5));
+    float a = smoothstep(0.5, 0.02, d);
+    a *= a;
+    gl_FragColor = vec4(uColor * (0.6 + a), a * uAlpha);
+  }`, 'pulse');
+
+const shadowProg = makeProgram(`
+  attribute vec2 aPos; // XZ
+  uniform mat4 uModel, uVP;
+  varying vec2 vUV;
+  void main(){ vUV = aPos * 0.5 + 0.5; gl_Position = uVP * (uModel * vec4(aPos.x, 0.0, aPos.y, 1.0)); }`, `
+  precision mediump float; varying vec2 vUV;
+  uniform sampler2D uTex; uniform float uStrength;
+  void main(){ float a = texture2D(uTex, vUV).a * uStrength; gl_FragColor = vec4(0.0, 0.0, 0.0, a); }`, 'shadow');
+
+/* ---------------- geometry: unit cube ---------------- */
+const cubeVS = [];
+{
+  const faces = [
+    // n, tangents
+    [[0,0,1],  [1,0,0],  [0,1,0]],   // +z front
+    [[0,0,-1], [-1,0,0], [0,1,0]],   // -z back
+    [[1,0,0],  [0,0,-1], [0,1,0]],   // +x right
+    [[-1,0,0], [0,0,1],  [0,1,0]],   // -x left
+    [[0,1,0],  [1,0,0],  [0,0,-1]],  // +y top
+    [[0,-1,0], [1,0,0],  [0,0,1]],   // -y bottom
+  ];
+  for (const [n, t, b] of faces) {
+    const base = cubeVS.length / 8;
+    for (let i = 0; i < 4; i++) {
+      const su = (i === 1 || i === 2) ? 1 : 0, sv = (i >= 2) ? 1 : 0;
+      const corner = [ (su*2-1) * 0.5, (sv*2-1) * 0.5, 0 ]; // cube spans -0.5..0.5, so m4trs scale = full size
+      // map local (t,b) space to world
+      const px = n[0]*0.5 + t[0]*corner[0] + b[0]*corner[1];
+      const py = n[1]*0.5 + t[1]*corner[0] + b[1]*corner[1];
+      const pz = n[2]*0.5 + t[2]*corner[0] + b[2]*corner[1];
+      cubeVS.push(px, py, pz, n[0], n[1], n[2], su, sv);
+    }
+  }
+}
+const cubeVBO = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, cubeVBO);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cubeVS), gl.STATIC_DRAW);
+const cubeCount = cubeVS.length / 8;
+const cubeIBO = gl.createBuffer();
+{ const idx = []; for (let f = 0; f < 6; f++) { const b = f*4; idx.push(b, b+1, b+2, b, b+2, b+3); } 
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cubeIBO);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW); }
+
+/* ---------------- geometry: shadow quad + cable tubes ---------------- */
+const quadVBO = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+const CABLE_SEGS = 16, CABLE_SIDES = 8, CABLES = 4;
+const CABLE_VERTS = CABLES * (CABLE_SEGS + 1) * CABLE_SIDES;
+const cableStride = 7; // pos3 + normal3 + frac1
+const cableArr = new Float32Array(CABLE_VERTS * cableStride);
+const cableIndex = new Uint16Array(CABLES * CABLE_SEGS * CABLE_SIDES * 6);
+{
+  let ii = 0;
+  for (let c = 0; c < CABLES; c++) {
+    const base = c * (CABLE_SEGS + 1) * CABLE_SIDES;
+    for (let s = 0; s < CABLE_SEGS; s++) for (let k = 0; k < CABLE_SIDES; k++) {
+      const a = base + s * CABLE_SIDES + k;
+      const b = base + s * CABLE_SIDES + (k + 1) % CABLE_SIDES;
+      const a2 = a + CABLE_SIDES, b2 = b + CABLE_SIDES;
+      cableIndex[ii++] = a; cableIndex[ii++] = a2; cableIndex[ii++] = b;
+      cableIndex[ii++] = b; cableIndex[ii++] = a2; cableIndex[ii++] = b2;
+    }
+  }
+}
+const cableVBO = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, cableVBO);
+gl.bufferData(gl.ARRAY_BUFFER, cableArr.byteLength, gl.DYNAMIC_DRAW);
+const cableIBO = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cableIBO);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, cableIndex, gl.STATIC_DRAW);
+
+/* ---------------- procedural textures ---------------- */
+function makeTexture(w, h, draw) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  draw(cv.getContext('2d'), w, h);
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  return t;
+}
+// deterministic pseudo-random
+let seed = 7;
+function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+
+const woodTex = makeTexture(512, 256, (ctx, w, h) => {
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#7a5433'); g.addColorStop(0.5, '#6b4a2c'); g.addColorStop(1, '#5d3f25');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  // planks
+  const plankW = w / 5;
+  for (let p = 0; p < 5; p++) {
+    const shade = 0.86 + rnd() * 0.3;
+    ctx.fillStyle = `rgba(${(90*shade)|0},${(62*shade)|0},${(36*shade)|0},0.55)`;
+    ctx.fillRect(p * plankW + 1, 0, plankW - 2, h);
+    ctx.fillStyle = 'rgba(30,18,8,0.6)'; ctx.fillRect(p * plankW, 0, 1.5, h);
+    // grain streaks
+    for (let s = 0; s < 26; s++) {
+      const y0 = rnd() * h, amp = 2 + rnd() * 6, ph = rnd() * 9, dark = rnd() > 0.5;
+      ctx.strokeStyle = dark ? `rgba(38,22,9,${0.08 + rnd()*0.16})` : `rgba(190,150,100,${0.05 + rnd()*0.1})`;
+      ctx.lineWidth = 0.6 + rnd() * 1.4;
+      ctx.beginPath();
+      for (let x = p * plankW + 2; x < (p + 1) * plankW - 2; x += 6)
+        ctx.lineTo(x, y0 + Math.sin(x * 0.05 + ph) * amp);
+      ctx.stroke();
+    }
+    // knots
+    if (rnd() > 0.5) {
+      const kx = p * plankW + plankW * (0.2 + rnd() * 0.6), ky = rnd() * h;
+      const kg = ctx.createRadialGradient(kx, ky, 1, kx, ky, 8 + rnd() * 8);
+      kg.addColorStop(0, 'rgba(35,20,8,0.55)'); kg.addColorStop(1, 'rgba(35,20,8,0)');
+      ctx.fillStyle = kg; ctx.beginPath(); ctx.arc(kx, ky, 16, 0, 7); ctx.fill();
+    }
+  }
+});
+const blobTex = makeTexture(128, 128, (ctx, w, h) => {
+  const g = ctx.createRadialGradient(w/2, h/2, 2, w/2, h/2, w/2);
+  g.addColorStop(0, 'rgba(0,0,0,0.65)'); g.addColorStop(0.55, 'rgba(0,0,0,0.35)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+});
+const floorTex = makeTexture(256, 256, (ctx, w, h) => {
+  const g = ctx.createRadialGradient(w/2, h/2, 8, w/2, h/2, w/2);
+  g.addColorStop(0, '#20242e'); g.addColorStop(0.55, '#141821'); g.addColorStop(1, '#0b0e14');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+});
+
+/* ---------------- scene state ---------------- */
+const BOX = { w: 0.66, h: 0.44, d: 0.54 };
+const boxes = [
+  { x: -1.55, z: -1.05, phase: 0.0 },  // AI-01  (front-left)
+  { x:  1.55, z: -1.05, phase: 1.7 },  // AI-02  (front-right)
+  { x:  1.55, z:  1.05, phase: 3.1 },  // AI-03  (back-right)
+  { x: -1.55, z:  1.05, phase: 4.6 },  // AI-04  (back-left)
+];
+const SW = { x: 0, z: 0, w: 0.95, h: 0.34, d: 0.62 };
+const TABLE = { w: 7.2, d: 4.6, h: 0.35 };
+
+let topo = 0;            // 0 = ring, 1 = switch
+let topoAnim = 0;        // 0..1 actual blend of routes
+let topoTarget = 0;
+let cablesDirty = true;
+
+const cables = [];
+for (let i = 0; i < 4; i++) {
+  cables.push({
+    // ring route: i -> (i+1)%4 ; switch route: i -> switch
+    sagSeed: 0.8 + i * 0.13,
+    pulses: [
+      { phase: i * 0.27,        speed: 0.20 + 0.03 * i },
+      { phase: i * 0.27 + 0.5,  speed: 0.15 + 0.025 * i },
+    ],
+  });
+}
+
+const camera = { yaw: -0.85, pitch: 0.52, dist: 6.8, target: [0, 0.42, 0], auto: true };
+let dpr = 1, viewW = 1, viewH = 1;
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  viewW = glCanvas.clientWidth; viewH = glCanvas.clientHeight;
+  glCanvas.width = Math.round(viewW * dpr); glCanvas.height = Math.round(viewH * dpr);
+  uiCanvas.width = glCanvas.width; uiCanvas.height = glCanvas.height;
+  gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------------- cable curves ---------------- */
+function boxPort(b, dirXZ, yOff) {
+  // attachment point on the side of a box facing dirXZ
+  const half = 0.5 * Math.max(BOX.w, BOX.d);
+  return [b.x + dirXZ[0] * half, BOX.h * (0.5 + (yOff || 0.25)), b.z + dirXZ[1] * half];
+}
+function swPort(dirXZ) {
+  const half = 0.5 * Math.max(SW.w, SW.d);
+  return [SW.x + dirXZ[0] * half, SW.h * 0.5 + 0.10, SW.z + dirXZ[1] * half];
+}
+function dirXZ(from, to) {
+  const dx = to[0] - from[0], dz = to[2] - from[2], l = Math.hypot(dx, dz) || 1;
+  return [dx / l, dz / l];
+}
+function bez(p0, p1, p2, t) {
+  const u = 1 - t;
+  return [u*u*p0[0] + 2*u*t*p1[0] + t*t*p2[0],
+          u*u*p0[1] + 2*u*t*p1[1] + t*t*p2[1],
+          u*u*p0[2] + 2*u*t*p1[2] + t*t*p2[2]];
+}
+function cableCurve(i, blend) {
+  const A = boxes[i], Bi = boxes[(i + 1) % 4];
+  const pa = [A.x, 0, A.z], pb = [Bi.x, 0, Bi.z], ps = [SW.x, 0, SW.z];
+  // ring endpoints
+  const rA = boxPort(A, dirXZ(pa, pb), 0.25 + 0.05 * (i % 2));
+  const rB = boxPort(Bi, dirXZ(pb, pa), 0.25 + 0.05 * ((i + 1) % 2));
+  // switch endpoints
+  const sA = boxPort(A, dirXZ(pa, ps), 0.3);
+  const sB = swPort(dirXZ(ps, pa));
+  const A2 = [lerp(rA[0], sA[0], blend), lerp(rA[1], sA[1], blend), lerp(rA[2], sA[2], blend)];
+  const B2 = [lerp(rB[0], sB[0], blend), lerp(rB[1], sB[1], blend), lerp(rB[2], sB[2], blend)];
+  const len = Math.hypot(B2[0]-A2[0], B2[2]-A2[2]);
+  const sag = clamp(0.32 + 0.10 * len + 0.08 * cables[i].sagSeed, 0.3, 0.85);
+  const mid = [(A2[0]+B2[0])/2, (A2[1]+B2[1])/2 - sag, (A2[2]+B2[2])/2];
+  mid[1] = Math.max(mid[1], 0.055); // drape onto the table, not through it
+  return [A2, mid, B2];
+}
+function rebuildCables(blend) {
+  let vi = 0;
+  for (let c = 0; c < CABLES; c++) {
+    const [P0, P1, P2] = cableCurve(c, blend);
+    for (let s = 0; s <= CABLE_SEGS; s++) {
+      const t = s / CABLE_SEGS;
+      const pt = bez(P0, P1, P2, t);
+      const pt2 = bez(P0, P1, P2, Math.min(t + 0.01, 1));
+      const T = v3norm(v3sub(pt2, t > 0.99 ? bez(P0, P1, P2, 0.98) : pt));
+      let N = v3norm(v3cross(T, [0, 1, 0]));
+      if (!isFinite(N[0])) N = [1, 0, 0];
+      const B = v3cross(T, N);
+      for (let k = 0; k < CABLE_SIDES; k++) {
+        const th = k / CABLE_SIDES * Math.PI * 2;
+        const nx = N[0] * Math.cos(th) + B[0] * Math.sin(th);
+        const ny = N[1] * Math.cos(th) + B[1] * Math.sin(th);
+        const nz = N[2] * Math.cos(th) + B[2] * Math.sin(th);
+        const o = (vi) * cableStride;
+        cableArr[o]   = pt[0]; cableArr[o+1] = pt[1]; cableArr[o+2] = pt[2];
+        cableArr[o+3] = nx;    cableArr[o+4] = ny;    cableArr[o+5] = nz;
+        cableArr[o+6] = t;
+        vi++;
+      }
+    }
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, cableVBO);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, cableArr);
+}
+
+/* ---------------- draw helpers ---------------- */
+function bindCubeAttribs(prog) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, cubeVBO);
+  const aPos = gl.getAttribLocation(prog, 'aPos');
+  const aNor = gl.getAttribLocation(prog, 'aNormal');
+  const aUV = gl.getAttribLocation(prog, 'aUV');
+  gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 32, 0);
+  if (aNor >= 0) { gl.enableVertexAttribArray(aNor); gl.vertexAttribPointer(aNor, 3, gl.FLOAT, false, 32, 12); }
+  if (aUV >= 0) { gl.enableVertexAttribArray(aUV); gl.vertexAttribPointer(aUV, 2, gl.FLOAT, false, 32, 24); }
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cubeIBO);
+}
+function drawCube(prog, model, opts) {
+  gl.uniformMatrix4fv(prog.u.uModel, false, model);
+  gl.uniform3fv(prog.u.uColor, opts.color);
+  gl.uniform3fv(prog.u.uEmissive, opts.emissive || [0, 0, 0]);
+  gl.uniform1f(prog.u.uSpec, opts.spec !== undefined ? opts.spec : 0.6);
+  gl.uniform1f(prog.u.uShin, opts.shin !== undefined ? opts.shin : 32);
+  gl.uniform1f(prog.u.uUseTex, opts.tex ? 1 : 0);
+  gl.drawElements(gl.TRIANGLES, 36, gl.UNSIGNED_SHORT, 0);
+}
+function drawShadow(model, strength) {
+  const P = shadowProg;
+  gl.useProgram(P.p);
+  gl.uniformMatrix4fv(P.u.uModel, false, model);
+  gl.uniform1f(P.u.uStrength, strength);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, blobTex);
+  gl.uniform1i(P.u.uTex, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+  const aPos = gl.getAttribLocation(P.p, 'aPos');
+  gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+function shadowModel(x, z, sx, sz) {
+  // quad geometry spans -1..1, so halve to get the intended world width
+  return m4trs(x, 0.006, z, sx * 0.5, 1, sz * 0.5);
+}
+
+/* ---------------- pulses ---------------- */
+const pulseArr = new Float32Array(CABLES * 2 * 3);
+const pulseVBO = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, pulseVBO);
+gl.bufferData(gl.ARRAY_BUFFER, pulseArr.byteLength, gl.DYNAMIC_DRAW);
+
+/* ---------------- input: orbit + zoom ---------------- */
+const pointers = new Map();
+let pinchDist = 0;
+glCanvas.addEventListener('pointerdown', e => {
+  glCanvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  camera.auto = false;
+  glCanvas.classList.add('dragging');
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+  }
+});
+glCanvas.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  const p = pointers.get(e.pointerId);
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (pointers.size === 1) {
+    camera.yaw -= dx * 0.0055;
+    camera.pitch = clamp(camera.pitch + dy * 0.0045, 0.08, 1.35);
+  } else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinchDist > 0) camera.dist = clamp(camera.dist * pinchDist / d, 3.2, 15);
+    pinchDist = d;
+  }
+});
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size === 0) glCanvas.classList.remove('dragging');
+}
+glCanvas.addEventListener('pointerup', endPointer);
+glCanvas.addEventListener('pointercancel', endPointer);
+glCanvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  camera.dist = clamp(camera.dist * Math.exp(e.deltaY * 0.0012), 3.2, 15);
+  camera.auto = false;
+}, { passive: false });
+
+/* ---------------- topology toggle ---------------- */
+const topoBtn = document.getElementById('topoBtn');
+const topoBtnText = document.getElementById('topoBtnText');
+const statusMode = document.getElementById('statusMode');
+const statusLinks = document.getElementById('statusLinks');
+function setTopology(t) {
+  topoTarget = t;
+  topoBtnText.textContent = t === 0 ? 'TOPOLOGY · SWITCH' : 'TOPOLOGY · RING';
+  statusMode.textContent = t === 0 ? 'RING' : 'SWITCH';
+  statusLinks.textContent = t === 0 ? '4 links · ring loop' : '4 links · via core switch';
+}
+function toggleTopology() { setTopology(1 - topoTarget); }
+topoBtn.addEventListener('click', toggleTopology);
+window.addEventListener('keydown', e => {
+  if (e.key === 't' || e.key === 'T') toggleTopology();
+});
+setTopology(0);
+
+/* ---------------- overlay labels ---------------- */
+const uictx = uiCanvas.getContext('2d');
+function labelFor(name, sx, sy, accent) {
+  uictx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
+  const w = uictx.measureText(name).width + 18;
+  const x = Math.round(sx - w / 2), y = Math.round(sy - 12);
+  uictx.fillStyle = 'rgba(9,12,18,0.78)';
+  uictx.strokeStyle = accent + '55';
+  uictx.lineWidth = 1;
+  if (uictx.roundRect) { uictx.beginPath(); uictx.roundRect(x, y, w, 22, 7); uictx.fill(); uictx.stroke(); }
+  else { uictx.fillRect(x, y, w, 22); uictx.strokeRect(x, y, w, 22); }
+  uictx.fillStyle = accent;
+  uictx.textAlign = 'center'; uictx.textBaseline = 'middle';
+  uictx.fillText(name, sx, y + 11.5);
+}
+function drawLabels(vp, time) {
+  const ctx = uictx;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, viewW, viewH);
+  const items = [];
+  for (let i = 0; i < 4; i++) {
+    const b = boxes[i];
+    items.push({ name: 'AI-0' + (i + 1), p: [b.x, BOX.h + 0.28, b.z], c: '#ffd98a' });
+  }
+  items.push({ name: 'CORE SWITCH', p: [SW.x, SW.h + topoAnim * 0.06 + 0.24 + Math.sin(time * 1.4) * 0.012, SW.z], c: '#7de3ff' });
+  for (const it of items) {
+    const c = xform(vp, it.p);
+    if (c[3] <= 0.05) continue;
+    const sx = (c[0] / c[3] * 0.5 + 0.5) * viewW;
+    const sy = (1 - (c[1] / c[3] * 0.5 + 0.5)) * viewH;
+    if (sx < -60 || sx > viewW + 60 || sy < -40 || sy > viewH + 40) continue;
+    // leader line
+    ctx.strokeStyle = it.c + '44';
+    ctx.beginPath(); ctx.moveTo(sx, sy + 8); ctx.lineTo(sx, sy + 16); ctx.stroke();
+    labelFor(it.name, sx, sy + 16, it.c);
+  }
+}
+
+/* ---------------- render loop ---------------- */
+const DEBUG = parseInt(new URLSearchParams(location.search).get('d') || '0', 10);
+gl.enable(gl.DEPTH_TEST);
+gl.clearColor(0.043, 0.055, 0.078, 1);
+
+const LIGHT_TIME_START = performance.now();
+let lastT = performance.now();
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = clamp((now - lastT) / 1000, 0, 0.05);
+  lastT = now;
+  const time = (now - LIGHT_TIME_START) / 1000;
+
+  // topology animation
+  if (topoAnim !== topoTarget) {
+    const dir = Math.sign(topoTarget - topoAnim);
+    topoAnim = clamp(topoAnim + dir * dt / 0.9, 0, 1);
+    cablesDirty = true;
+  }
+  const blend = smooth(topoAnim);
+  const wake = blend; // switch wakes up as cables re-route
+
+  if (camera.auto) camera.yaw += dt * 0.1;
+
+  // camera
+  const eye = [
+    camera.target[0] + camera.dist * Math.cos(camera.pitch) * Math.sin(camera.yaw),
+    camera.target[1] + camera.dist * Math.sin(camera.pitch),
+    camera.target[2] + camera.dist * Math.cos(camera.pitch) * Math.cos(camera.yaw),
+  ];
+  const view = m4lookAt(eye, camera.target, [0, 1, 0]);
+  const proj = m4persp(0.9, viewW / viewH, 0.1, 60);
+  const vp = m4mul(proj, view);
+
+  if (cablesDirty) { rebuildCables(blend); cablesDirty = false; }
+
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  /* ---- opaque pass ---- */
+  const M = meshProg;
+  gl.useProgram(M.p);
+  gl.uniformMatrix4fv(M.u.uVP, false, vp);
+  gl.uniform3fv(M.u.uEye, eye);
+  gl.uniform1i(M.u.uTex, 0);
+  bindCubeAttribs(M.p);
+
+  // floor
+  if (DEBUG !== 1 && DEBUG !== 99) {
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, floorTex);
+  drawCube(M, m4trs(0, -2.28, 0, 30, 0.02, 30), { color: [1, 1, 1], spec: 0.05, shin: 8, tex: true });
+  }
+  // table top + apron
+  if (DEBUG !== 2 && DEBUG !== 99) {
+  gl.bindTexture(gl.TEXTURE_2D, woodTex);
+  drawCube(M, m4trs(0, -TABLE.h / 2, 0, TABLE.w, TABLE.h, TABLE.d), { color: [1, 1, 1], spec: 0.35, shin: 26, tex: true });
+  // legs
+  for (const lx of [-1, 1]) for (const lz of [-1, 1])
+    drawCube(M, m4trs(lx * (TABLE.w / 2 - 0.5), -TABLE.h - 0.95, lz * (TABLE.d / 2 - 0.4), 0.22, 1.9, 0.22),
+      { color: [0.32, 0.22, 0.13], spec: 0.15, shin: 12 });
+  // table edge trim (gold detail)
+  drawCube(M, m4trs(0, -TABLE.h + 0.015, 0, TABLE.w + 0.03, 0.03, TABLE.d + 0.03), { color: [0.75, 0.55, 0.22], spec: 0.9, shin: 40, emissive: [0.03, 0.02, 0.0] });
+  }
+
+  // gold AI boxes
+  if (DEBUG !== 4) {
+  for (let i = 0; i < 4; i++) {
+    const b = boxes[i];
+    const glow = 0.5 + 0.5 * Math.sin(time * 2.2 + b.phase);
+    if (DEBUG !== 41) drawCube(M, m4trs(b.x, BOX.h / 2, b.z, BOX.w, BOX.h, BOX.d),
+      { color: [1.0, 0.79, 0.33], spec: 1.5, shin: 64 });
+    // gold top bevel
+    if (DEBUG !== 42 && DEBUG !== 99) drawCube(M, m4trs(b.x, BOX.h + 0.012, b.z, BOX.w * 0.94, 0.024, BOX.d * 0.94),
+      { color: [1.1, 0.9, 0.45], spec: 1.8, shin: 80 });
+    // dark face panel (front face, toward camera start side -z)
+    if (DEBUG !== 43 && DEBUG !== 99) drawCube(M, m4trs(b.x, BOX.h * 0.52, b.z - BOX.d / 2 - 0.008, BOX.w * 0.68, BOX.h * 0.5, 0.02),
+      { color: [0.09, 0.09, 0.11], spec: 0.8, shin: 48 });
+    // status light strip
+    const e = 0.25 + 0.75 * glow;
+    drawCube(M, m4trs(b.x - BOX.w * 0.22, BOX.h * 0.72, b.z - BOX.d / 2 - 0.014, BOX.w * 0.26, 0.035, 0.012),
+      { color: [0, 0, 0], emissive: [0.25 * e, 0.85 * e, 1.0 * e] });
+    // tiny power LED
+    drawCube(M, m4trs(b.x + BOX.w * 0.3, BOX.h * 0.28, b.z - BOX.d / 2 - 0.014, 0.035, 0.035, 0.012),
+      { color: [0, 0, 0], emissive: [1.0 * e, 0.55 * e, 0.15 * e] });
+  }
+  }
+
+  if (DEBUG === 99) return; // debug: bodies only
+
+  // core switch box
+  if (DEBUG !== 5) {
+  const swY = SW.h / 2 + wake * 0.06;
+  drawCube(M, m4trs(SW.x, swY, SW.z, SW.w, SW.h, SW.d),
+    { color: [0.16, 0.17, 0.20], spec: 1.0, shin: 48 });
+  drawCube(M, m4trs(SW.x, SW.h + wake * 0.06 + 0.012, SW.z, SW.w * 0.96, 0.024, SW.d * 0.96),
+    { color: [0.85, 0.64, 0.26], spec: 1.4, shin: 60 });
+  // switch face + port LEDs (light up when active)
+  drawCube(M, m4trs(SW.x, swY, SW.z - SW.d / 2 - 0.008, SW.w * 0.86, SW.h * 0.5, 0.02),
+    { color: [0.07, 0.07, 0.09], spec: 0.7, shin: 40 });
+  for (let i = 0; i < 4; i++) {
+    const on = wake * (0.55 + 0.45 * Math.sin(time * 3 + i * 1.3));
+    drawCube(M, m4trs(SW.x - SW.w * 0.32 + i * SW.w * 0.21, swY + 0.03, SW.z - SW.d / 2 - 0.016, 0.06, 0.05, 0.012),
+      { color: [0, 0, 0], emissive: [0.1 * on, 0.8 * on, 1.0 * on] });
+  }
+  }
+
+  /* ---- shadows ---- */
+  if (DEBUG !== 7 && DEBUG !== 99) {
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+  drawShadow(shadowModel(0, 0, 1.15, 0.8), 0.9);
+  for (const b of boxes) drawShadow(shadowModel(b.x, b.z, 0.62, 0.5), 0.8);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+  }
+
+  /* ---- cable core (opaque-ish) ---- */
+  if (DEBUG !== 6 && DEBUG !== 99) {
+  const C = cableProg;
+  gl.useProgram(C.p);
+  gl.uniformMatrix4fv(C.u.uVP, false, vp);
+  bindCableAttribs(C.p);
+  gl.uniform1f(C.u.uRadius, 0.028);
+  gl.uniform3f(C.u.uColor, 0.4, 1.0, 1.05);
+  gl.uniform1f(C.u.uAlpha, 1.0);
+  gl.uniform1f(C.u.uGlow, 0.25);
+  gl.drawElements(gl.TRIANGLES, cableIndex.length, gl.UNSIGNED_SHORT, 0);
+
+  /* ---- cable glow (additive) ---- */
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  gl.depthMask(false);
+  gl.uniform1f(C.u.uRadius, 0.09);
+  gl.uniform1f(C.u.uAlpha, 0.34);
+  gl.uniform1f(C.u.uGlow, 0.5);
+  gl.drawElements(gl.TRIANGLES, cableIndex.length, gl.UNSIGNED_SHORT, 0);
+  gl.uniform1f(C.u.uRadius, 0.19);
+  gl.uniform1f(C.u.uAlpha, 0.12);
+  gl.uniform1f(C.u.uGlow, 0.5);
+  gl.drawElements(gl.TRIANGLES, cableIndex.length, gl.UNSIGNED_SHORT, 0);
+
+  /* ---- data pulses ---- */
+  const Pm = pulseProg;
+  gl.useProgram(Pm.p);
+  gl.uniformMatrix4fv(Pm.u.uVP, false, vp);
+  const pulseAlpha = 1 - Math.sin(Math.PI * blend) * 0.92; // fade while re-routing
+  if (pulseAlpha > 0.02) {
+    let n = 0;
+    for (let c = 0; c < CABLES; c++) {
+      const [P0, P1, P2] = cableCurve(c, blend);
+      for (const pu of cables[c].pulses) {
+        const t = (pu.phase + time * pu.speed) % 1;
+        const p = bez(P0, P1, P2, t);
+        pulseArr[n * 3] = p[0]; pulseArr[n * 3 + 1] = p[1] + 0.03; pulseArr[n * 3 + 2] = p[2];
+        n++;
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, pulseVBO);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, pulseArr.subarray(0, n * 3));
+    const aPos = gl.getAttribLocation(Pm.p, 'aPos');
+    gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.uniform1f(Pm.u.uSize, 160 * dpr);
+    gl.uniform3f(Pm.u.uColor, 0.8, 1.0, 1.0);
+    gl.uniform1f(Pm.u.uAlpha, pulseAlpha);
+    gl.drawArrays(gl.POINTS, 0, n);
+  }
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+  }
+
+  drawLabels(vp, time);
+}
+
+function bindCableAttribs(prog) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, cableVBO);
+  const aPos = gl.getAttribLocation(prog, 'aPos');
+  const aNor = gl.getAttribLocation(prog, 'aNormal');
+  const aFrac = gl.getAttribLocation(prog, 'aFrac');
+  gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 28, 0);
+  gl.enableVertexAttribArray(aNor); gl.vertexAttribPointer(aNor, 3, gl.FLOAT, false, 28, 12);
+  gl.enableVertexAttribArray(aFrac); gl.vertexAttribPointer(aFrac, 1, gl.FLOAT, false, 28, 24);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cableIBO);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

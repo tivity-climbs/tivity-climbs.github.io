@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Gummy Pit — soft-body gummy bears</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#f3e3c6;}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  #c{display:block;width:100vw;height:100vh;touch-action:none;cursor:grab;}
+  #c.grabbing{cursor:grabbing;}
+  header{
+    position:fixed;top:0;left:0;right:0;display:flex;align-items:center;
+    justify-content:space-between;padding:14px 18px;pointer-events:none;z-index:5;
+    font-family:ui-rounded,"Segoe UI Rounded",Avenir,"Trebuchet MS",system-ui,sans-serif;
+  }
+  h1{
+    margin:0;font-size:17px;letter-spacing:.22em;font-weight:800;color:#7a4a1e;
+    text-shadow:0 1px 0 rgba(255,255,255,.6);user-select:none;
+  }
+  h1 small{display:block;font-size:10px;letter-spacing:.28em;font-weight:600;color:#a3763d;margin-top:2px;}
+  #reset{
+    pointer-events:auto;font:inherit;font-weight:800;letter-spacing:.12em;font-size:13px;
+    color:#fff;background:linear-gradient(180deg,#ff6b74,#e8354a);
+    border:none;border-radius:999px;padding:10px 20px;cursor:pointer;
+    box-shadow:0 3px 0 #b3202f,0 6px 14px rgba(179,32,47,.35),inset 0 1px 0 rgba(255,255,255,.45);
+    transition:transform .12s ease,box-shadow .12s ease,filter .12s;
+  }
+  #reset:hover{filter:brightness(1.06);}
+  #reset:active{transform:translateY(2px);box-shadow:0 1px 0 #b3202f,0 3px 8px rgba(179,32,47,.35),inset 0 1px 0 rgba(255,255,255,.45);}
+  #reset:focus-visible{outline:3px solid #7a4a1e;outline-offset:2px;}
+  #hint{
+    position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:5;
+    font-family:ui-rounded,"Segoe UI Rounded",Avenir,"Trebuchet MS",system-ui,sans-serif;
+    font-size:12px;font-weight:700;letter-spacing:.25em;color:#8a5a28;opacity:.75;
+    text-transform:uppercase;pointer-events:none;user-select:none;
+    transition:opacity .8s ease;
+  }
+  #hint.gone{opacity:0;}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Gummy bear pit. Drag the gummy bears to squash and fling them."></canvas>
+<header>
+  <h1>GUMMY PIT<small>soft · squashy · sugar</small></h1>
+  <button id="reset" aria-label="Reset the gummy bear pile">RESET</button>
+</header>
+<div id="hint">grab &nbsp;·&nbsp; squash &nbsp;·&nbsp; fling</div>
+<script>
+'use strict';
+/* ============================================================
+   GUMMY PIT — soft-body gummy bears
+   Verlet particles + distance constraints + area (pressure)
+   preservation + spatial-hash particle collisions.
+   No libraries, no external assets.
+   ============================================================ */
+const TAU = Math.PI * 2;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hintEl = document.getElementById('hint');
+const resetBtn = document.getElementById('reset');
+
+/* ---------- tiny seeded PRNG (deterministic resets) ---------- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+
+/* ---------- color helpers ---------- */
+function hexToRgb(h){const n=parseInt(h.slice(1),16);return[(n>>16)&255,(n>>8)&255,n&255];}
+function mix(h1,h2,t){const a=hexToRgb(h1),b=hexToRgb(h2);return `rgb(${Math.round(a[0]+(b[0]-a[0])*t)},${Math.round(a[1]+(b[1]-a[1])*t)},${Math.round(a[2]+(b[2]-a[2])*t)})`;}
+function rgba(h,a){const c=hexToRgb(h);return `rgba(${c[0]},${c[1]},${c[2]},${a})`;}
+
+const FLAVORS = ['#ff4757','#ff8f3f','#ffd32a','#2ed573','#7ec8ff','#c689ff'];
+const LIGHT='#ffffff', DARK='#3a1030';
+
+/* ---------- gummy bear silhouette ----------
+   Radius multipliers at 16 uniform directions (screen, 0=right, CW).
+   ears near top, arms at sides, legs at bottom. Smoothed with
+   Catmull-Rom and sampled into an outline. */
+const CTRL=[0.97,0.90,0.60,0.97,0.88,0.97,0.60,0.93,0.97,0.70,0.88,0.96,0.72,0.96,0.88,0.70];
+function shapeRadius(th){
+  const n=CTRL.length, step=TAU/n;
+  let t=(((th%TAU)+TAU)%TAU)/step;
+  const i=Math.floor(t), f=t-i;
+  const r0=CTRL[(i-1+n)%n],r1=CTRL[i],r2=CTRL[(i+1)%n],r3=CTRL[(i+2)%n];
+  const f2=f*f,f3=f2*f;
+  return .5*((2*r1)+(-r0+r2)*f+(2*r0-5*r1+4*r2-r3)*f2+(-r0+3*r1-3*r2+r3)*f3);
+}
+const M=26; // outline particles
+
+/* ---------- world / tuning ---------- */
+let W=0,H=0,DPR=1,ground=0;
+const H_STEP   = 1/120;     // fixed physics step (s)
+const MAX_STEPS= 5;         // bounded catch-up
+const GRAV     = 2600;
+const VMAX     = 26;        // max per-step displacement (px)
+const BEARS_N  = ()=>Math.max(8,Math.min(15,Math.round(W/150)));
+const bearScale= ()=>Math.max(38,Math.min(78,Math.min(W,H)*0.066));
+
+let bears=[], seedCounter=1, simTime=0;
+let grab=null;               // {bear, i, w0}
+const pointer={x:0,y:0,down:false,has:false};
+let pvx=0,pvy=0,lastPX=0,lastPY=0,lastPT=0;
+
+/* ---------- bear construction ---------- */
+function makeBear(x,y,scale,ang,ci,rng){
+  const pts=[];
+  for(let j=0;j<M;j++){
+    const th=j*TAU/M;
+    const r=shapeRadius(th)*scale;
+    const a=th+ang;
+    pts.push({x:x+Math.cos(a)*r, y:y+Math.sin(a)*r, px:0,py:0, w:1});
+  }
+  const c={x:x, y:y+scale*0.05, px:0,py:0, w:1};
+  for(const p of pts){p.px=p.x;p.py=p.y;}
+  c.px=c.x;c.py=c.y;
+  // springs: [a,b,rest,stiffness]
+  const springs=[];
+  const d=(a,b)=>Math.hypot(pts[a].x-pts[b].x,pts[a].y-pts[b].y);
+  const dc=a=>Math.hypot(pts[a].x-c.x,pts[a].y-c.y);
+  for(let j=0;j<M;j++){
+    springs.push([j,(j+1)%M,d(j,(j+1)%M),0.95]);
+    springs.push([j,(j+2)%M,d(j,(j+2)%M),0.35]);
+    springs.push([j,-1,dc(j),0.10]); // -1 == center
+  }
+  // rest area (shoelace, screen coords)
+  let A=0;
+  for(let j=0;j<M;j++){const p=pts[j],q=pts[(j+1)%M];A+=p.x*q.y-q.x*p.y;}
+  A=Math.abs(A)/2;
+  return {
+    pts,c,springs,restArea:A,area:A,
+    color:FLAVORS[ci%FLAVORS.length], scale,
+    phase:rng()*TAU, r0:0
+  };
+}
+
+function spawn(seed){
+  const rng=mulberry32(seed*7919+13);
+  const s=bearScale();
+  const n=BEARS_N();
+  const list=[];
+  const cols=Math.max(4,Math.ceil(Math.sqrt(n*1.7)));
+  for(let i=0;i<n;i++){
+    const col=i%cols, row=Math.floor(i/cols);
+    const span=Math.min(W-2*s, cols*s*1.5);
+    const x0=(W-span)/2 + s*0.75;
+    const x=x0 + (span/(cols-1||1))*col + (rng()-0.5)*s*0.7;
+    const y=ground - s*0.9 - row*s*1.7 - rng()*s*4 - 60;
+    list.push(makeBear(x,y, (0.86+rng()*0.28)*s, rng()*TAU, i + Math.floor(rng()*FLAVORS.length), rng));
+  }
+  return list;
+}
+
+/* ---------- physics ---------- */
+function areaOf(b){
+  let A=0;const p=b.pts;
+  for(let j=0;j<M;j++){const u=p[j],v=p[(j+1)%M];A+=u.x*v.y-v.x*u.y;}
+  return A/2; // negative = clockwise in screen coords
+}
+
+function solveDist(p,q,rest,s){
+  let dx=q.x-p.x,dy=q.y-p.y;
+  let d=Math.sqrt(dx*dx+dy*dy)||1e-6;
+  const w=p.w+q.w; if(w===0)return;
+  const f=((d-rest)/d)*s/w;
+  p.x+=dx*f*p.w; p.y+=dy*f*p.w;
+  q.x-=dx*f*q.w; q.y-=dy*f*q.w;
+}
+
+const grid=new Map();
+function collisions(){
+  grid.clear();
+  const cell=18;
+  const all=[];
+  for(const b of bears){for(const p of b.pts){all.push(p);}all.push(b.c);}
+  for(const p of all){
+    const k=((p.x/cell)|0)+','+((p.y/cell)|0);
+    let a=grid.get(k); if(!a){a=[];grid.set(k,a);} a.push(p);
+  }
+  const r=7, min=2*r, min2=min*min;
+  for(const p of all){
+    const cx=(p.x/cell)|0, cy=(p.y/cell)|0;
+    for(let gx=cx-1;gx<=cx+1;gx++)for(let gy=cy-1;gy<=cy+1;gy++){
+      const a=grid.get(gx+','+gy); if(!a)continue;
+      for(const q of a){
+        if(q===p)continue;
+        if(q.x<p.x||(q.x===p.x&&q.y<p.y))continue; // dedupe pairs
+        let dx=q.x-p.x,dy=q.y-p.y,d2=dx*dx+dy*dy;
+        if(d2<min2&&d2>1e-9){
+          const d=Math.sqrt(d2), f=(min-d)/d*0.5;
+          const wp=p.w+q.w;
+          p.x-=dx*f*(p.w/wp); p.y-=dy*f*(p.w/wp);
+          q.x+=dx*f*(q.w/wp); q.y+=dy*f*(q.w/wp);
+        }else if(d2<=1e-9){p.x+=0.01;}
+      }
+    }
+  }
+}
+
+function step(h){
+  simTime+=h;
+  // integrate
+  const g=GRAV*h*h, damp=0.999;
+  for(const b of bears){
+    for(const p of b.pts){      let vx=(p.x-p.px)*damp, vy=(p.y-p.py)*damp;
+      const v=Math.hypot(vx,vy);
+      if(v>VMAX){vx*=VMAX/v;vy*=VMAX/v;}
+      p.px=p.x;p.py=p.y;
+      p.x+=vx; p.y+=vy+g;
+    }
+    {const p=b.c;let vx=(p.x-p.px)*damp,vy=(p.y-p.py)*damp;p.px=p.x;p.py=p.y;p.x+=vx;p.y+=vy+g;}
+    // grabbed particle chases pointer
+    if(grab&&grab.bear===b){
+      const p=grab.pts? b.pts[grab.i] : b.c;
+      let tx=pointer.x,ty=pointer.y;
+      let dx=tx-p.x,dy=ty-p.y;
+      const d=Math.hypot(dx,dy), pull=Math.min(d,30);
+      if(d>1e-6){p.x+=dx/d*pull*0.45; p.y+=dy/d*pull*0.45;}
+      p.w=0.12;
+    }else if(grab===null){b.c.w=1;for(const p of b.pts)p.w=1;}
+  }
+  // constraints (2 iterations)
+  for(let it=0;it<2;it++){
+    for(const b of bears){
+      const breathe=b.restArea*(1+0.012*Math.sin(simTime*2.2+b.phase)); // idle jelly life
+      const A=areaOf(b);
+      const strain=(breathe-A)/b.restArea; // + squeezed
+      const kp=0.10;
+      const p=b.pts;
+      for(let j=0;j<M;j++){
+        const u=p[j],v=p[(j+1)%M];
+        let ex=v.x-u.x,ey=v.y-u.y;
+        const el=Math.hypot(ex,ey)||1e-6;
+        // outward normal (screen-CW polygon): (dy,-dx)
+        const nx=ey/el, ny=-ex/el;
+        const f=kp*strain*el*0.5;
+        u.x+=nx*f;u.y+=ny*f; v.x+=nx*f;v.y+=ny*f;
+      }
+      for(const s of b.springs){
+        const a=s[0]<0?b.c:b.pts[s[0]];
+        const c=s[1]<0?b.c:b.pts[s[1]];
+        solveDist(a,c,s[2],s[3]);
+      }
+      // safety: max stretch clamp on neighbor edges
+      for(let j=0;j<M;j++){
+        const u=p[j],v=p[(j+1)%M];
+        let dx=v.x-u.x,dy=v.y-u.y;const d=Math.hypot(dx,dy)||1e-6;
+        if(d>b.scale*0.62){const f=(d-b.scale*0.62)/d*0.5;u.x+=dx*f;u.y+=dy*f;v.x-=dx*f;v.y-=dy*f;}
+      }
+    }
+    collisions();
+    // bounds
+    for(const b of bears){
+      const r=7;
+      for(const p of b.pts){bound(p,r);} bound(b.c,r);
+    }
+  }
+  if(grab&&grab.bear){ // relax weights of non-grabbed center if we grab outline
+    const b=grab.bear;
+    b.c.w=(grab.pts)?0.12:1;
+    for(let j=0;j<M;j++)b.pts[j].w=(grab.pts)?1:0.12;
+  }
+}
+function bound(p,r){
+  if(p.y>ground-r){p.y=ground-r; p.px=p.x-(p.x-p.px)*0.82; /*floor friction*/ if(p.py>p.y)p.py=p.y;}
+  if(p.y< -200) p.y=-200;
+  if(p.x<r){p.x=r;} if(p.x>W-r){p.x=W-r;}
+}
+
+/* ---------- pointer ---------- */
+function toCanvas(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left),y:(e.clientY-r.top)};}
+canvas.addEventListener('pointerdown',e=>{
+  canvas.setPointerCapture(e.pointerId);
+  const t=toCanvas(e);pointer.x=t.x;pointer.y=t.y;pointer.down=true;
+  pvx=pvy=0;lastPX=t.x;lastPY=t.y;lastPT=performance.now();
+  // nearest particle
+  let best=null,bd=(bearScale()*0.62)**2;
+  for(const b of bears){
+    for(let j=0;j<M;j++){const p=b.pts[j];const dd=(p.x-t.x)**2+(p.y-t.y)**2;if(dd<bd){bd=dd;best={bear:b,i:j,pts:true};}}
+    const c=b.c;const dd=(c.x-t.x)**2+(c.y-t.y)**2;if(dd<bd){bd=dd;best={bear:b,pts:false};}
+  }
+  if(best){grab=best;canvas.classList.add('grabbing');}
+  hintEl.classList.add('gone');
+},{passive:true});
+canvas.addEventListener('pointermove',e=>{
+  const t=toCanvas(e);
+  const now=performance.now();
+  const dt=Math.max(1,now-lastPT);
+  pvx=pvx*0.6+((t.x-lastPX)/dt*1000)*0.4;
+  pvy=pvy*0.6+((t.y-lastPY)/dt*1000)*0.4;
+  lastPX=t.x;lastPY=t.y;lastPT=now;
+  pointer.x=t.x;pointer.y=t.y;
+},{passive:true});
+function release(){
+  if(grab&&grab.bear){
+    const p=grab.pts?grab.bear.pts[grab.i]:grab.bear.c;
+    const h=H_STEP;
+    const vx=Math.max(-3200,Math.min(3200,pvx)), vy=Math.max(-3200,Math.min(3200,pvy));
+    p.px=p.x-Math.max(-VMAX,Math.min(VMAX,vx*h));
+    p.py=p.y-Math.max(-VMAX,Math.min(VMAX,vy*h));
+  }
+  grab=null;canvas.classList.remove('grabbing');
+}
+canvas.addEventListener('pointerup',release);
+canvas.addEventListener('pointercancel',release);
+window.addEventListener('keydown',e=>{if(e.key==='r'||e.key==='R')reset();});
+
+function reset(){seedCounter++;bears=spawn(seedCounter);grab=null;}
+
+/* ---------- rendering ---------- */
+let grain=null;
+function makeGrain(){
+  const g=document.createElement('canvas');g.width=g.height=140;
+  const gc=g.getContext('2d');const im=gc.createImageData(140,140);
+  const rng=mulberry32(42);
+  for(let i=0;i<im.data.length;i+=4){const v=200+rng()*55|0;im.data[i]=v;im.data[i+1]=v;im.data[i+2]=v;im.data[i+3]=14;}
+  gc.putImageData(im,0,0);grain=g;
+}
+
+let bgCache=null,fgCache=null;
+function buildCaches(){
+  bgCache=document.createElement('canvas');bgCache.width=Math.round(W*DPR);bgCache.height=Math.round(H*DPR);
+  const b=bgCache.getContext('2d');b.setTransform(DPR,0,0,DPR,0,0);
+  const bg=b.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#f8ecd4');bg.addColorStop(0.55,'#f1ddba');bg.addColorStop(1,'#e7cda2');
+  b.fillStyle=bg;b.fillRect(0,0,W,H);
+  const sp=b.createRadialGradient(W*0.5,H*0.34,10,W*0.5,H*0.34,Math.max(W,H)*0.62);
+  sp.addColorStop(0,'rgba(255,252,240,0.85)');sp.addColorStop(1,'rgba(255,252,240,0)');
+  b.fillStyle=sp;b.fillRect(0,0,W,H);
+  const fl=b.createLinearGradient(0,ground-8,0,H);
+  fl.addColorStop(0,'rgba(122,74,30,0.0)');fl.addColorStop(0.12,'rgba(122,74,30,0.10)');fl.addColorStop(1,'rgba(110,62,20,0.22)');
+  b.fillStyle=fl;b.fillRect(0,ground-8,W,H-ground+8);
+  b.strokeStyle='rgba(255,255,255,0.5)';b.lineWidth=1.5;
+  b.beginPath();b.moveTo(0,ground-0.5);b.lineTo(W,ground-0.5);b.stroke();
+
+  fgCache=document.createElement('canvas');fgCache.width=Math.round(W*DPR);fgCache.height=Math.round(H*DPR);
+  const f=fgCache.getContext('2d');f.setTransform(DPR,0,0,DPR,0,0);
+  const v=f.createRadialGradient(W/2,H/2,Math.min(W,H)*0.45,W/2,H/2,Math.max(W,H)*0.75);
+  v.addColorStop(0,'rgba(90,50,10,0)');v.addColorStop(1,'rgba(90,50,10,0.16)');
+  f.fillStyle=v;f.fillRect(0,0,W,H);
+  if(grain){f.globalAlpha=0.5;f.fillStyle=f.createPattern(grain,'repeat');f.fillRect(0,0,W,H);}
+}
+
+function resize(){
+  DPR=Math.min(2,window.devicePixelRatio||1);
+  W=window.innerWidth;H=window.innerHeight;
+  canvas.width=Math.round(W*DPR);canvas.height=Math.round(H*DPR);
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ground=H-Math.max(64,H*0.11);
+  if(grain)buildCaches();
+}
+
+function bearPath(b){
+  const p=b.pts, path=new Path2D();
+  let mx=(p[0].x+p[1].x)/2,my=(p[0].y+p[1].y)/2;
+  path.moveTo(mx,my);
+  for(let j=1;j<=M;j++){
+    const a=p[j%M], n=p[(j+1)%M];
+    path.quadraticCurveTo(a.x,a.y,(a.x+n.x)/2,(a.y+n.y)/2);
+  }
+  path.closePath();return path;
+}
+
+/* ---------- main loop (fixed timestep, bounded catch-up) ---------- */
+
+function drawShadow(b){
+  const p=b.pts;
+  let cx=0,cy=0,bot=-1e9;
+  for(const q of p){cx+=q.x;cy+=q.y;if(q.y>bot)bot=q.y;}
+  cx/=M;cy/=M;
+  let r=0;for(const q of p){const d=Math.hypot(q.x-cx,q.y-cy);if(d>r)r=d;}
+  const lift=Math.max(0,ground-bot);
+  const a=Math.max(0.05,0.30-lift/900);
+  const rx=r*(1.05+lift/700), ry=rx*0.22;
+  ctx.save();
+  ctx.translate(cx,ground+5);ctx.scale(1,ry/rx);
+  const g=ctx.createRadialGradient(0,0,0,0,0,rx);
+  g.addColorStop(0,`rgba(80,45,10,${a})`);g.addColorStop(1,'rgba(80,45,10,0)');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,rx,0,TAU);ctx.fill();
+  ctx.restore();
+}
+
+function drawBear(b){
+  const p=b.pts;
+  let cx=0,cy=0;for(const q of p){cx+=q.x;cy+=q.y;}cx/=M;cy/=M;
+  let r=0;for(const q of p){const d=Math.hypot(q.x-cx,q.y-cy);if(d>r)r=d;}
+  const path=bearPath(b);
+  const sq=Math.max(0.45,Math.min(1.5,b.area/b.restArea)); // squash factor
+  const col=b.color;
+  // translucent body
+  const g=ctx.createRadialGradient(cx-r*0.35,cy-r*0.45,r*0.1,cx,cy,r*1.15);
+  g.addColorStop(0,rgba(col,0.50));
+  g.addColorStop(0.55,mix(col,'#000000',0.04).replace('rgb','rgba').replace(')',',0.72)'));
+  g.addColorStop(1,rgba(mix(col,'#000000',0.38),0.88));
+  ctx.fillStyle=g;ctx.fill(path);
+  ctx.save();ctx.clip(path);
+  // inner molded edge
+  ctx.strokeStyle='rgba(255,255,255,0.16)';ctx.lineWidth=5;ctx.stroke(path);
+  // translucency glow toward the light (top-left)
+  ctx.globalCompositeOperation='lighter';
+  const gg=ctx.createRadialGradient(cx-r*0.42,cy-r*0.5,2,cx-r*0.42,cy-r*0.5,r*(1.05/Math.sqrt(sq)));
+  gg.addColorStop(0,'rgba(255,255,255,0.55)');gg.addColorStop(0.5,'rgba(255,255,255,0.10)');gg.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=gg;ctx.fillRect(cx-r*2,cy-r*2,r*4,r*4);
+  // warm light passing through the candy (bottom-right inner shade)
+  ctx.globalCompositeOperation='source-over';
+  const sh=ctx.createRadialGradient(cx+r*0.55,cy+r*0.6,2,cx+r*0.55,cy+r*0.6,r*1.25);
+  sh.addColorStop(0,'rgba(60,10,40,0.16)');sh.addColorStop(1,'rgba(60,10,40,0)');
+  ctx.fillStyle=sh;ctx.fillRect(cx-r*2,cy-r*2,r*4,r*4);
+  // specular highlights (head area, offset to the light)
+  ctx.globalCompositeOperation='lighter';
+  const hx=cx-r*0.30,hy=cy-r*0.58;
+  let hg=ctx.createRadialGradient(hx,hy,0,hx,hy,r*0.34);
+  hg.addColorStop(0,'rgba(255,255,255,0.75)');hg.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=hg;ctx.beginPath();ctx.ellipse(hx,hy,r*0.30,r*0.20,-0.5,0,TAU);ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.85)';
+  ctx.beginPath();ctx.ellipse(hx-r*0.06,hy-r*0.05,r*0.065,r*0.042,-0.5,0,TAU);ctx.fill();
+  // tiny sparkles on ears/arms
+  ctx.fillStyle='rgba(255,255,255,0.30)';
+  for(const q of p){const d=Math.hypot(q.x-cx,q.y-cy);if(d>r*0.75){const dx=(q.x-cx)*0.72,dy=(q.y-cy)*0.72;
+    ctx.beginPath();ctx.ellipse(cx+dx-r*0.08,cy+dy-r*0.08,r*0.045,r*0.03,-0.4,0,TAU);ctx.fill();}}
+  ctx.restore();
+  // rim
+  ctx.strokeStyle=rgba(mix(col,'#000000',0.45),0.35);ctx.lineWidth=1.5;ctx.stroke(path);
+}
+
+function centroidY(b){let y=0;for(const p of b.pts)y+=p.y;return y/M;}
+let last=performance.now(),acc=0;
+function frame(now){
+  requestAnimationFrame(frame);
+  let el=(now-last)/1000;last=now;
+  if(el>0.25)el=0.25;
+  acc+=el;
+  let n=0;
+  while(acc>=H_STEP&&n<MAX_STEPS){step(H_STEP);acc-=H_STEP;n++;}
+  if(n===MAX_STEPS)acc=0;
+  for(const b of bears)b.area=areaOf(b);
+  if(bgCache)ctx.drawImage(bgCache,0,0,W,H);
+  const sorted=[...bears].sort((a,b2)=>centroidY(a)-centroidY(b2));
+  for(const b of sorted)drawShadow(b);
+  for(const b of sorted)drawBear(b);
+  if(fgCache)ctx.drawImage(fgCache,0,0,W,H);
+}
+function centroidY(b){let y=0;for(const p of b.pts)y+=p.y;return y/M;}
+
+/* ---------- boot ---------- */
+window.addEventListener('resize',()=>{
+  resize();
+  for(const b of bears)for(const p of b.pts){if(p.y>ground-7)p.y=ground-7;if(p.x>W-7)p.x=W-7;}
+  const c=bears[0]&&bears[0].c;if(c){if(c.y>ground-7)c.y=ground-7;if(c.x>W-7)c.x=W-7;}
+});
+resetBtn.addEventListener('click',()=>{reset();resetBtn.blur();});
+resize();makeGrain();buildCaches();bears=spawn(seedCounter);
+requestAnimationFrame(frame);
+
+// test hook (harmless in production)
+window.__state={get bears(){return bears;},get grab(){return grab;},step,reset:()=>reset()};
+</script>
+</body>
+</html>

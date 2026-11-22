@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Water Balloons — soft-body playground</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #0b1020;
+    font-family: ui-rounded, "SF Pro Rounded", "Segoe UI", system-ui, -apple-system, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #stage { position: fixed; inset: 0; display: block; touch-action: none; cursor: grab; }
+  #stage.grabbing { cursor: grabbing; }
+
+  #hud {
+    position: fixed; top: 14px; left: 0; right: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 16px; pointer-events: none; gap: 12px;
+  }
+  .brand {
+    display: flex; flex-direction: column; gap: 2px;
+    color: #dfe7ff; pointer-events: none;
+  }
+  .brand b { font-size: 17px; letter-spacing: .04em; font-weight: 700; }
+  .brand span { font-size: 11.5px; color: #8f9cc4; letter-spacing: .02em; }
+  #resetBtn {
+    pointer-events: auto;
+    appearance: none; border: 1px solid rgba(255,255,255,.18);
+    background: rgba(22,30,58,.72); color: #e8eeff;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    font: 600 13.5px/1 inherit; font-family: inherit; letter-spacing: .03em;
+    padding: 10px 16px; border-radius: 999px; cursor: pointer;
+    box-shadow: 0 4px 18px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.08);
+    transition: transform .12s ease, background .12s ease, border-color .12s ease;
+  }
+  #resetBtn:hover { background: rgba(38,50,92,.85); border-color: rgba(255,255,255,.32); transform: translateY(-1px); }
+  #resetBtn:active { transform: translateY(0) scale(.97); }
+  #resetBtn:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
+
+  #score {
+    position: fixed; right: 16px; bottom: 14px;
+    color: #8f9cc4; font-size: 12.5px; letter-spacing: .04em;
+    background: rgba(22,30,58,.6); border: 1px solid rgba(255,255,255,.1);
+    padding: 7px 12px; border-radius: 999px;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    pointer-events: none; font-variant-numeric: tabular-nums;
+  }
+  #hint {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    color: #7e8bb3; font-size: 12.5px; letter-spacing: .03em; text-align: center;
+    pointer-events: none; transition: opacity 1s ease; white-space: nowrap;
+  }
+  @media (max-width: 560px) {
+    #hint { white-space: normal; max-width: 70vw; }
+    .brand span { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" aria-label="Soft-body water balloon playground. Drag balloons to throw them."></canvas>
+<div id="hud">
+  <div class="brand"><b>water balloons</b><span>soft-body · grab · throw · pop</span></div>
+  <button id="resetBtn" type="button" aria-label="Reset balloons">↻ reset</button>
+</div>
+<div id="score" aria-live="polite">popped × 0</div>
+<div id="hint"></div>
+
+<script>
+'use strict';
+/* ============================================================
+   Soft-body water balloons — single-file, no libraries.
+   Physics: Verlet integration + position-based constraints
+   (rim springs, bending springs, gas-pressure area model),
+   spatially pruned polygon collision, pop-on-impact,
+   particle splashes, WebAudio pops. Deterministic reset.
+   ============================================================ */
+
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const resetBtn = document.getElementById('resetBtn');
+const scoreEl = document.getElementById('score');
+const hintEl = document.getElementById('hint');
+
+let W = 0, H = 0, DPR = 1, floorY = 0;
+
+/* ---------- deterministic RNG ---------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* ---------- tunables ---------- */
+const DT = 1 / 240;            // fixed physics step
+const MAX_STEPS = 8;           // catch-up cap per frame
+const GRAV = 2300;             // px/s^2
+const ITER = 5;                // constraint iterations
+const DAMP = 0.992;            // per-step velocity damping
+const RESTITUTION = 0.32;      // wall bounce
+const FRICTION = 0.35;         // wall tangential loss
+const POP_V = 1700;            // wall impact pop threshold px/s
+const POP_V_BB = 2800;         // balloon-balloon pop threshold
+const STRETCH_POP = 3.2;       // spring overstretch pop factor
+const MIN_AGE = 0.45;          // s before a balloon can pop
+const MAX_DROPS = 750;
+const N_RIM = 16;              // rim points per balloon
+const PALETTE = [8, 42, 160, 200, 268, 330]; // hues
+const HINT = 'grab a balloon · drag · let go to throw — hard hits pop 💦';
+
+/* ---------- state ---------- */
+let rng = mulberry32(0xBADA55);
+let balloons = [], drops = [], bits = [], flashes = [], floaters = [];
+let poppedCount = 0, timeAlive = 0;
+const grabs = new Map(); // pointerId -> {b, idx, x, y}
+
+/* ---------- helpers ---------- */
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+
+function polyArea(pts) {
+  let a = 0;
+  for (let i = 0, n = pts.length; i < n; i++) {
+    const p = pts[i], q = pts[(i + 1) % n];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a * 0.5;
+}
+function centroidOf(pts) {
+  let x = 0, y = 0;
+  for (const p of pts) { x += p.x; y += p.y; }
+  return { x: x / pts.length, y: y / pts.length };
+}
+function pointInPoly(px, py, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i], b = pts[j];
+    if ((a.y > py) !== (b.y > py) &&
+        px < (b.x - a.x) * (py - a.y) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+function closestOnSeg(px, py, ax, ay, bx, by) {
+  const abx = bx - ax, aby = by - ay;
+  const t = clamp(((px - ax) * abx + (py - ay) * aby) / (abx * abx + aby * aby || 1), 0, 1);
+  return { x: ax + abx * t, y: ay + aby * t };
+}
+function pointVel(p) { return { x: (p.x - p.px) / DT, y: (p.y - p.py) / DT }; }
+
+/* ---------- balloon ---------- */
+class Balloon {
+  constructor(x, y, r, hue, t0) {
+    this.r = r; this.hue = hue; this.age = 0; this.t0 = t0;
+    this.restLen = 2 * r * Math.sin(Math.PI / N_RIM);
+    this.restLen2 = 2 * r * Math.sin(2 * Math.PI / N_RIM);
+    this.pts = [];
+    for (let i = 0; i < N_RIM; i++) {
+      const a = (i / N_RIM) * Math.PI * 2;
+      const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+      this.pts.push({ x: px, y: py, px, py });
+    }
+    this.restArea = Math.abs(polyArea(this.pts));
+    this.phase = rng() * Math.PI * 2;
+    this.touching = false; // any rim point at a wall this step
+    this.boostT = -1;      // sim time until which free-flight speed is allowed (set on throw release)
+    this.lastWall = 0;     // max wall impact speed (COM) this step
+    this.lastBB = 0;       // max balloon-balloon relative speed this step
+    this.hotBB = false;    // true if a BB impact involved a thrown (boosted) balloon
+  }
+  centroid() { return centroidOf(this.pts); }
+  area() { return Math.abs(polyArea(this.pts)); }
+}
+
+/* ---------- scene ---------- */
+function reset() {
+  rng = mulberry32(0xBADA55);
+  balloons = []; drops = []; bits = []; flashes = []; floaters = [];
+  poppedCount = 0; timeAlive = 0;
+  grabs.clear();
+  scoreEl.textContent = 'popped × 0';
+
+  const n = clamp(Math.round(W / 270), 3, 7);
+  const baseR = clamp(Math.min(W, H) * 0.048, 17, 54);
+  const hues = PALETTE.slice();
+  for (let i = hues.length - 1; i > 0; i--) { // deterministic shuffle
+    const j = (rng() * (i + 1)) | 0; const t = hues[i]; hues[i] = hues[j]; hues[j] = t;
+  }
+  for (let i = 0; i < n; i++) {
+    const r = baseR + rng() * baseR * 0.5;
+    const x = clamp(W * ((i + 0.5) / n) + (rng() - 0.5) * W / n * 0.3, r + 26, W - r - 26);
+    const y = floorY - 70 - rng() * 300; // gentle drop-in, never lethal speeds
+    balloons.push(new Balloon(x, y, r, hues[i % hues.length], rng() * 0.4));
+  }
+}
+
+/* ---------- audio (code-generated, no assets) ---------- */
+let AC = null, noiseBuf = null, lastPopSnd = 0, lastThudSnd = 0, lastSplashSnd = 0;
+function ensureAudio() {
+  try {
+    if (!AC) {
+      AC = new (window.AudioContext || window.webkitAudioContext)();
+      const len = AC.sampleRate * 0.35;
+      noiseBuf = AC.createBuffer(1, len, AC.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (AC.state === 'suspended') AC.resume();
+  } catch (e) { AC = null; }
+  return AC;
+}
+function playPop(intensity) {
+  const ac = ensureAudio(); if (!ac) return;
+  const now = ac.currentTime;
+  if (now - lastPopSnd < 0.05) return; lastPopSnd = now;
+  const i = clamp(intensity, 0.3, 1);
+  const src = ac.createBufferSource(); src.buffer = noiseBuf;
+  const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.9;
+  bp.frequency.setValueAtTime(1400, now);
+  bp.frequency.exponentialRampToValueAtTime(260, now + 0.11);
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0.5 * i, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+  src.connect(bp).connect(g).connect(ac.destination);
+  src.start(now); src.stop(now + 0.2);
+  const o = ac.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(240, now);
+  o.frequency.exponentialRampToValueAtTime(60, now + 0.09);
+  const og = ac.createGain();
+  og.gain.setValueAtTime(0.22 * i, now);
+  og.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+  o.connect(og).connect(ac.destination); o.start(now); o.stop(now + 0.12);
+}
+function playThud(v) {
+  const ac = ensureAudio(); if (!ac) return;
+  const now = ac.currentTime;
+  if (now - lastThudSnd < 0.09) return; lastThudSnd = now;
+  const o = ac.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(110, now);
+  o.frequency.exponentialRampToValueAtTime(45, now + 0.08);
+  const g = ac.createGain();
+  const vol = clamp((v - 300) / 1600, 0, 1) * 0.25;
+  g.gain.setValueAtTime(vol, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+  o.connect(g).connect(ac.destination); o.start(now); o.stop(now + 0.12);
+}
+function playSplash() {
+  const ac = ensureAudio(); if (!ac) return;
+  const now = ac.currentTime;
+  if (now - lastSplashSnd < 0.06) return; lastSplashSnd = now;
+  const src = ac.createBufferSource(); src.buffer = noiseBuf;
+  const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2400;
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0.05, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+  src.connect(hp).connect(g).connect(ac.destination);
+  src.start(now); src.stop(now + 0.1);
+}
+
+/* ---------- popping & particles ---------- */
+function popBalloon(b, reason) {
+  const idx = balloons.indexOf(b);
+  if (idx < 0) return;
+  window.__test && (window.__test.lastReason = reason + ' age=' + b.age.toFixed(2));
+  if (window.__dbg2) {
+    const myG = [...grabs.values()].some(g => g.b === b);
+    window.__dbg2.push({t: timeAlive.toFixed(2), reason, x: b.centroid().x | 0, y: b.centroid().y | 0,
+      area: (b.area() / b.restArea).toFixed(2), avgV: Math.hypot(b.avgVX || 0, b.avgVY || 0) | 0,
+      grabbed: myG, boost: timeAlive < b.boostT});
+  }
+  balloons.splice(idx, 1);
+  const c = b.centroid();
+  const impV = Math.max(b.lastWall || 0, (b.lastBB || 0) * 0.7);
+  const impact = clamp(impV > 0 ? impV / POP_V : 0.7, 0.35, 1);
+  playPop(impact);
+
+  for (const p of b.pts) {
+    const v = pointVel(p);
+    const dx = p.x - c.x, dy = p.y - c.y;
+    const dl = Math.hypot(dx, dy) || 1;
+    const nx = dx / dl, ny = dy / dl;
+    for (let k = 0; k < 2; k++) {
+      const sp = 120 + rng() * 420;
+      drops.push({
+        x: p.x + nx * (rng() * 6), y: p.y + ny * (rng() * 6),
+        vx: v.x * 0.75 + nx * sp + (rng() - 0.5) * 180,
+        vy: v.y * 0.75 + ny * sp - 60 - rng() * 220,
+        r: 2 + rng() * 3.4, hue: b.hue,
+        life: 0, max: 1.3 + rng() * 1.1, rested: 0
+      });
+    }
+  }
+  for (let k = 0; k < 6; k++) {
+    const p = b.pts[(rng() * b.pts.length) | 0];
+    const v = pointVel(p);
+    bits.push({
+      x: p.x, y: p.y,
+      vx: v.x * 0.5 + (rng() - 0.5) * 500, vy: v.y * 0.5 - 150 - rng() * 300,
+      ang: rng() * Math.PI * 2, vang: (rng() - 0.5) * 14,
+      len: b.restLen * (0.6 + rng() * 0.8), hue: b.hue, life: 0, max: 0.9 + rng() * 0.5
+    });
+  }
+  flashes.push({ x: c.x, y: c.y, r: b.r * 0.6, hue: b.hue, life: 0, max: 0.32 });
+  floaters.push({ x: c.x, y: c.y, life: 0, max: 0.9 });
+
+  poppedCount++;
+  scoreEl.textContent = 'popped × ' + poppedCount;
+  if (balloons.length === 0) {
+    hintEl.textContent = 'all popped! hit ↻ reset or press R for more 💦';
+    hintEl.style.opacity = '1';
+  }
+  if (drops.length > MAX_DROPS) drops.splice(0, drops.length - MAX_DROPS);
+}
+
+/* ---------- physics step ---------- */
+function step(dt) {
+  timeAlive += dt;
+
+  // integrate + grabs
+  for (const b of balloons) {
+    b.age += dt;
+    const maxStep = b.restLen * 0.6; // per-point displacement clamp (anti-blowup)
+    const dmp = b.areaRatio !== undefined && b.areaRatio < 0.75 ? 0.982 : DAMP; // squashed balloons shed energy
+    for (const p of b.pts) {
+      let vx = (p.x - p.px) * dmp, vy = (p.y - p.py) * dmp;
+      const sp = Math.hypot(vx, vy);
+      if (sp > maxStep) { vx *= maxStep / sp; vy *= maxStep / sp; }
+      p.px = p.x; p.py = p.y;
+      p.x += vx; p.y += vy + GRAV * dt * dt;
+    }
+  }
+  for (const g of grabs.values()) {
+    if (!balloons.includes(g.b)) { grabs.delete(g); continue; }
+    const p = g.b.pts[g.idx];
+    // strong positional pull toward the pointer; neighbors share the load
+    const pull = (target, k) => { target.x += (g.x - target.x) * k; target.y += (g.y - target.y) * k; };
+    pull(p, 0.55);
+    const n = g.b.pts.length;
+    pull(g.b.pts[(g.idx + 1) % n], 0.16);
+    pull(g.b.pts[(g.idx - 1 + n) % n], 0.16);
+  }
+
+  // center-of-mass velocity (robust pop metric; rim points jitter too much)
+  for (const b of balloons) {
+    let vx = 0, vy = 0;
+    for (const p of b.pts) { vx += p.x - p.px; vy += p.y - p.py; }
+    b.avgVX = vx / b.pts.length / DT; b.avgVY = vy / b.pts.length / DT;
+  }
+
+  const all = balloons;
+  for (const b of all) b.touching = false;
+  const hit = (b, speed, bb, hot) => { // record impact speed (center-of-mass based)
+    if (bb) {
+      if (speed > b.lastBB) { b.lastBB = speed; b.hotBB = !!hot; }
+    } else if (speed > b.lastWall) b.lastWall = speed;
+  };
+  for (let it = 0; it < ITER; it++) {
+    // rim + bending springs + self-collision (no fold-through)
+    for (const b of all) {
+      const P = b.pts, n = P.length;
+      for (let i = 0; i < n; i++) {
+        solveDist(P[i], P[(i + 1) % n], b.restLen, 1.0);
+        solveDist(P[i], P[(i + 2) % n], b.restLen2, 0.28);
+      }
+      for (let i = 0; i < n; i++) {
+        const p = P[i];
+        for (let j = i + 2; j < n; j++) {
+          if (i === 0 && j === n - 1) continue; // adjacent via wrap
+          const q1 = P[j], q2 = P[(j + 1) % n];
+          if (Math.abs(p.x - q1.x) > b.restLen * 1.4 && Math.abs(p.x - q2.x) > b.restLen * 1.4) continue;
+          if (Math.abs(p.y - q1.y) > b.restLen * 1.4 && Math.abs(p.y - q2.y) > b.restLen * 1.4) continue;
+          selfCollide(p, q1, q2);
+        }
+      }
+    }
+    // gas pressure (area restoration) → the wobble
+    for (const b of all) {
+      const area = b.area();
+      const c = b.centroid();
+      const err = (b.restArea - area) / b.restArea;
+      if (Math.abs(err) < 1e-5) continue;
+      const P = b.pts, n = P.length;
+      for (let i = 0; i < n; i++) {
+        const prev = P[(i - 1 + n) % n], next = P[(i + 1) % n], p = P[i];
+        let nx = next.y - prev.y, ny = -(next.x - prev.x);
+        // point outward (away from centroid)
+        if (nx * (p.x - c.x) + ny * (p.y - c.y) < 0) { nx = -nx; ny = -ny; }
+        const nl = Math.hypot(nx, ny) || 1;
+        const k = 0.06 * b.r * clamp(err, -0.5, 0.5);
+        p.x += (nx / nl) * k; p.y += (ny / nl) * k;
+      }
+    }
+    // walls
+    for (const b of all) {
+      for (const p of b.pts) {
+        if (p.y > floorY) {
+          b.touching = true;
+          hit(b, Math.abs(b.avgVY), false);
+          p.y = floorY;
+          p.py = p.y + ((p.y - p.py) / DT) * RESTITUTION * DT;   // reflect
+          p.px = p.x - ((p.x - p.px) / DT) * (1 - FRICTION) * DT; // friction
+        }
+        if (p.x < 6) { b.touching = true; hit(b, Math.abs(b.avgVX), false); p.x = 6; p.px = p.x + ((p.x - p.px) / DT) * RESTITUTION * DT; }
+        if (p.x > W - 6) { b.touching = true; hit(b, Math.abs(b.avgVX), false); p.x = W - 6; p.px = p.x + ((p.x - p.px) / DT) * RESTITUTION * DT; }
+        if (p.y < -600) p.y = -600;
+      }
+    }
+    // balloon ↔ balloon (bbox-pruned point vs polygon)
+    for (let a = 0; a < all.length; a++) {
+      const A = all[a], ca = A.centroid(), ra = A.r * 1.35;
+      for (let c = 0; c < all.length; c++) {
+        if (a === c) continue;
+        const B = all[c], cb = B.centroid();
+        const dx = ca.x - cb.x, dy = ca.y - cb.y;
+        if (dx * dx + dy * dy > (ra + B.r * 1.35) * (ra + B.r * 1.35)) continue;
+        const BP = B.pts, bn = BP.length;
+        for (const p of A.pts) {
+          if (!pointInPoly(p.x, p.y, BP)) continue;
+          // push to nearest edge
+          let best = null, bd = Infinity;
+          for (let i = 0; i < bn; i++) {
+            const q1 = BP[i], q2 = BP[(i + 1) % bn];
+            const q = closestOnSeg(p.x, p.y, q1.x, q1.y, q2.x, q2.y);
+            const d = (p.x - q.x) ** 2 + (p.y - q.y) ** 2;
+            if (d < bd) { bd = d; best = { q, q1, q2 }; }
+          }
+          if (!best) continue;
+          const q = best.q;
+          let nx = p.x - q.x, ny = p.y - q.y;
+          const nl = Math.hypot(nx, ny) || 1;
+          nx /= nl; ny /= nl;
+          // relative normal speed for pop detection
+          const rvn = (A.avgVX - B.avgVX) * nx + (A.avgVY - B.avgVY) * ny;
+          const rel = Math.abs(rvn);
+          if (rel > 100) {
+            const hot = timeAlive < A.boostT || timeAlive < B.boostT;
+            hit(A, rel, true, hot); hit(B, rel, true, hot);
+          }
+          const push = Math.min(bd > 0.5 ? Math.sqrt(bd) : 0.5, 4); // capped: no slingshot
+          p.x += nx * push * 0.5; p.y += ny * push * 0.5;
+          best.q1.x -= nx * push * 0.1; best.q1.y -= ny * push * 0.1;
+          best.q2.x -= nx * push * 0.1; best.q2.y -= ny * push * 0.1;
+        }
+      }
+    }
+  }
+
+  // COM displacement clamp — kills pressure-slingshot ejections of passive balloons
+  for (const b of balloons) {
+    const P = b.pts, n = P.length;
+    let dx = 0, dy = 0;
+    for (const p of P) { dx += (p.x - p.px); dy += (p.y - p.py); }
+    dx /= n; dy /= n;
+    const d = Math.hypot(dx, dy);
+    const grabbed = [...grabs.values()].some(g => g.b === b);
+    const lim = grabbed ? 10 : (timeAlive < b.boostT ? 14 : 5); // px per step
+    if (d > lim) {
+      const fx = dx * (lim / d) / (dx || 1e-9), fy = dy * (lim / d) / (dy || 1e-9);
+      for (const p of P) { p.x = p.px + (p.x - p.px) * fx; p.y = p.py + (p.y - p.py) * fy; }
+    }
+  }
+
+  // pops: impact speed, overstretch, squashed area
+  for (let i = balloons.length - 1; i >= 0; i--) {
+    const b = balloons[i];
+    let maxStretch = 0;
+    const P = b.pts, n = P.length;
+    for (let k = 0; k < n; k++) {
+      const p = P[k], q = P[(k + 1) % n];
+      const d = Math.hypot(p.x - q.x, p.y - q.y) / b.restLen;
+      if (d > maxStretch) maxStretch = d;
+    }
+    const areaRatio = b.area() / b.restArea;
+    b.areaRatio = areaRatio;
+    const impactW = b.lastWall || 0, impactB = b.lastBB || 0;
+    b.lastWall = 0; b.lastBB = 0;
+    if (b.age < MIN_AGE) continue;
+    const myGrabs = [...grabs.values()].filter(g => g.b === b);
+    const grabbedNow = myGrabs.length > 0;
+    const ptrSpeed = grabbedNow ? Math.max(...myGrabs.map(g => Math.hypot(g.vx || 0, g.vy || 0))) : 0;
+    // deterministic smash: pointer driven past a wall while the balloon is against it
+    const smashing = grabbedNow && b.touching &&
+      myGrabs.some(g => g.y > floorY + 18 || g.x < -12 || g.x > W + 18);
+    if (smashing) {
+      popBalloon(b, 'smash v=' + ptrSpeed.toFixed(0));
+    } else if (grabbedNow && areaRatio < 0.3) {
+      popBalloon(b, 'crush ' + areaRatio.toFixed(2));
+    } else if (impactW > POP_V) {
+      popBalloon(b, 'wall impact v=' + impactW.toFixed(0));
+    } else if (impactB > POP_V_BB && b.hotBB) {
+      popBalloon(b, 'balloon hit v=' + impactB.toFixed(0));
+    } else if (maxStretch > STRETCH_POP) {
+      popBalloon(b, 'stretch ' + maxStretch.toFixed(2));
+    } else if (areaRatio < 0.25) {
+      popBalloon(b, 'squash ' + areaRatio.toFixed(2));
+    } else if (impactW > 520 || impactB > 520) {
+      playThud(Math.max(impactW, impactB));
+    }
+  }
+
+  // droplets
+  for (let i = drops.length - 1; i >= 0; i--) {
+    const d = drops[i];
+    d.life += dt;
+    if (d.life > d.max) { drops.splice(i, 1); continue; }
+    d.vy += GRAV * dt;
+    d.vx *= (1 - 0.4 * dt); d.vy *= (1 - 0.12 * dt);
+    d.x += d.vx * dt; d.y += d.vy * dt;
+    if (d.y > floorY - 1) {
+      d.y = floorY - 1;
+      if (Math.abs(d.vy) > 130) {
+        d.vy *= -0.34; d.vx *= 0.72;
+        if (Math.abs(d.vy) > 260) playSplash();
+      } else {
+        d.vy = 0; d.vx *= 0.86;
+        d.rested += dt;
+      }
+    }
+    if (d.x < 2) { d.x = 2; d.vx *= -0.5; }
+    if (d.x > W - 2) { d.x = W - 2; d.vx *= -0.5; }
+  }
+  // rubber bits
+  for (let i = bits.length - 1; i >= 0; i--) {
+    const s = bits[i];
+    s.life += dt;
+    if (s.life > s.max) { bits.splice(i, 1); continue; }
+    s.vy += GRAV * dt;
+    s.x += s.vx * dt; s.y += s.vy * dt; s.ang += s.vang * dt;
+    if (s.y > floorY - 2) { s.y = floorY - 2; s.vy *= -0.4; s.vx *= 0.7; s.vang *= 0.7; }
+  }
+  for (let i = flashes.length - 1; i >= 0; i--) {
+    flashes[i].life += dt;
+    if (flashes[i].life > flashes[i].max) flashes.splice(i, 1);
+  }
+  for (let i = floaters.length - 1; i >= 0; i--) {
+    floaters[i].life += dt;
+    if (floaters[i].life > floaters[i].max) floaters.splice(i, 1);
+  }
+  // keep grabbed balloons from sinking out of view
+  for (const g of grabs.values()) {
+    const p = g.b.pts[g.idx];
+    g.x = clamp(g.x, 4, W - 4); g.y = clamp(g.y, 4, H - 4);
+    p.x = clamp(p.x, 4, W - 4);
+  }
+}
+function solveDist(p, q, rest, stiff) {
+  const dx = q.x - p.x, dy = q.y - p.y;
+  const d = Math.hypot(dx, dy) || 1e-6;
+  const diff = (d - rest) / d * 0.5 * stiff;
+  p.x += dx * diff; p.y += dy * diff;
+  q.x -= dx * diff; q.y -= dy * diff;
+}
+// keep point p on the outside of edge q1q2 (p is non-adjacent to this edge)
+function selfCollide(p, q1, q2) {
+  const ex = q2.x - q1.x, ey = q2.y - q1.y;
+  const elen = Math.hypot(ex, ey) || 1e-6;
+  const nx = -ey / elen, ny = ex / elen; // edge normal
+  const side = (p.x - q1.x) * nx + (p.y - q1.y) * ny;
+  const rest = elen * 0.18; // required clearance
+  if (Math.abs(side) >= rest) return;
+  // push point out to the side it's already on
+  const push = (rest - side) * 0.5;
+  p.x += nx * push; p.y += ny * push;
+  q1.x -= nx * push * 0.3; q1.y -= ny * push * 0.3;
+  q2.x -= nx * push * 0.3; q2.y -= ny * push * 0.3;
+}
+
+/* ---------- rendering ---------- */
+function render(t) {
+  // sky
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#0b1024');
+  sky.addColorStop(0.55, '#131b38');
+  sky.addColorStop(1, '#1b2547');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // soft vignette
+  const vg = ctx.createRadialGradient(W / 2, H * 0.42, Math.min(W, H) * 0.25, W / 2, H * 0.42, Math.max(W, H) * 0.75);
+  vg.addColorStop(0, 'rgba(255,255,255,0.045)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.28)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, W, H);
+
+  // floor
+  const fg = ctx.createLinearGradient(0, floorY, 0, H);
+  fg.addColorStop(0, '#232f58');
+  fg.addColorStop(1, '#151d3b');
+  ctx.fillStyle = fg;
+  ctx.fillRect(0, floorY, W, H - floorY);
+  ctx.strokeStyle = 'rgba(160,190,255,0.28)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(0, floorY + 0.5); ctx.lineTo(W, floorY + 0.5); ctx.stroke();
+
+  // shadows
+  for (const b of balloons) {
+    const c = b.centroid();
+    const h = clamp(1 - (floorY - c.y) / 700, 0.12, 1);
+    const sw = b.r * (1.5 - h * 0.5);
+    ctx.fillStyle = `rgba(0,0,0,${0.16 + 0.2 * h})`;
+    ctx.beginPath();
+    ctx.ellipse(c.x, floorY + 5, sw, sw * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // droplets
+  for (const d of drops) {
+    const a = clamp(1 - d.life / d.max, 0, 1);
+    const sp = Math.hypot(d.vx, d.vy);
+    const stretch = clamp(sp / 900, 0, 0.85);
+    ctx.save();
+    ctx.translate(d.x, d.y);
+    if (stretch > 0.05) ctx.rotate(Math.atan2(d.vy, d.vx));
+    const rr = d.r * (d.rested > 0.2 ? 1.25 : 1); // landed drops spread a bit
+    const g = ctx.createRadialGradient(-rr * 0.3, -rr * 0.3, rr * 0.15, 0, 0, rr * (1 + stretch * 2));
+    g.addColorStop(0, `hsla(${d.hue}, 90%, 78%, ${0.9 * a})`);
+    g.addColorStop(1, `hsla(${d.hue}, 85%, 48%, ${0.75 * a})`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rr * (1 + stretch), rr * (1 - stretch * 0.35), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // balloons
+  for (const b of balloons) {
+    const P = b.pts, n = P.length;
+    // smooth closed rim through midpoints
+    ctx.beginPath();
+    const m0 = { x: (P[n - 1].x + P[0].x) / 2, y: (P[n - 1].y + P[0].y) / 2 };
+    ctx.moveTo(m0.x, m0.y);
+    for (let i = 0; i < n; i++) {
+      const p = P[i], q = P[(i + 1) % n];
+      ctx.quadraticCurveTo(p.x, p.y, (p.x + q.x) / 2, (p.y + q.y) / 2);
+    }
+    ctx.closePath();
+
+    const c = b.centroid();
+    const g = ctx.createRadialGradient(c.x - b.r * 0.35, c.y - b.r * 0.45, b.r * 0.1, c.x, c.y, b.r * 1.35);
+    g.addColorStop(0, `hsla(${b.hue}, 92%, 72%, 0.95)`);
+    g.addColorStop(0.55, `hsla(${b.hue}, 85%, 55%, 0.92)`);
+    g.addColorStop(1, `hsla(${b.hue}, 80%, 38%, 0.94)`);
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.lineWidth = 2.6;
+    ctx.strokeStyle = `hsla(${b.hue}, 70%, 26%, 0.9)`;
+    ctx.stroke();
+
+    // knot
+    const k0 = P[0], k1 = P[1], k2 = P[n - 1];
+    const kx = (k0.x + k1.x + k2.x) / 3, ky = (k0.y + k1.y + k2.y) / 3;
+    ctx.fillStyle = `hsla(${b.hue}, 70%, 30%, 0.95)`;
+    ctx.beginPath(); ctx.arc(kx, ky, 3.2, 0, Math.PI * 2); ctx.fill();
+
+    // specular highlight + wobbling air bubble
+    const hl = ctx.createRadialGradient(c.x - b.r * 0.38, c.y - b.r * 0.5, 1, c.x - b.r * 0.38, c.y - b.r * 0.5, b.r * 0.5);
+    hl.addColorStop(0, 'rgba(255,255,255,0.55)');
+    hl.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hl;
+    ctx.beginPath();
+    ctx.ellipse(c.x - b.r * 0.38, c.y - b.r * 0.5, b.r * 0.34, b.r * 0.2, -0.6, 0, Math.PI * 2);
+    ctx.fill();
+    const wob = Math.sin(t * 0.0026 + b.phase) * b.r * 0.12;
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.beginPath();
+    ctx.ellipse(c.x + wob, c.y - b.r * 0.1 + wob * 0.4, b.r * 0.14, b.r * 0.09, wob * 0.05, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // rubber shreds
+  for (const s of bits) {
+    const a = clamp(1 - s.life / s.max, 0, 1);
+    ctx.save();
+    ctx.translate(s.x, s.y); ctx.rotate(s.ang);
+    ctx.strokeStyle = `hsla(${s.hue}, 75%, 45%, ${0.9 * a})`;
+    ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-s.len / 2, 0); ctx.quadraticCurveTo(0, -s.len * 0.4, s.len / 2, 0); ctx.stroke();
+    ctx.restore();
+  }
+
+  // pop flashes
+  for (const f of flashes) {
+    const k = f.life / f.max;
+    ctx.strokeStyle = `hsla(${f.hue}, 95%, 80%, ${(1 - k) * 0.85})`;
+    ctx.lineWidth = 3 * (1 - k) + 0.5;
+    ctx.beginPath();
+    ctx.arc(f.x, f.y, f.r + k * f.r * 2.6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // floating "+splash" tags
+  ctx.font = '600 13px ui-rounded, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  for (const f of floaters) {
+    const k = f.life / f.max;
+    ctx.fillStyle = `rgba(235,244,255,${(1 - k) * 0.9})`;
+    ctx.fillText('splash!', f.x, f.y - 14 - k * 34);
+  }
+}
+
+/* ---------- main loop (fixed timestep, bounded catch-up) ---------- */
+let last = performance.now(), acc = 0;
+function frame(now) {
+  let frameDt = (now - last) / 1000;
+  last = now;
+  if (frameDt > 0.25) frameDt = 0.25;
+  acc += frameDt;
+  let steps = 0;
+  while (acc >= DT && steps < MAX_STEPS) { step(DT); acc -= DT; steps++; }
+  if (steps === MAX_STEPS) acc = 0; // drop backlog, never spiral
+  render(now);
+  requestAnimationFrame(frame);
+}
+
+/* ---------- input ---------- */
+function toLocal(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function pickBalloon(x, y) {
+  let best = null, bd = Infinity;
+  for (const b of balloons) {
+    for (let i = 0; i < b.pts.length; i++) {
+      const p = b.pts[i];
+      const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+      if (d < bd) { bd = d; best = { b, idx: i, d: Math.sqrt(d) }; }
+    }
+  }
+  const grabR = best ? Math.max(34, best.b.r * 0.9) : 0;
+  if (best && (best.d < grabR || pointInPoly(x, y, best.b.pts))) return best;
+  return null;
+}
+canvas.addEventListener('pointerdown', (e) => {
+  ensureAudio();
+  const { x, y } = toLocal(e);
+  const hit = pickBalloon(x, y);
+  if (!hit) return;
+  canvas.setPointerCapture(e.pointerId);
+  grabs.set(e.pointerId, { b: hit.b, idx: hit.idx, x, y, vx: 0, vy: 0, t: e.timeStamp });
+  canvas.classList.add('grabbing');
+  hintEl.style.opacity = '0.35';
+});
+canvas.addEventListener('pointermove', (e) => {
+  const g = grabs.get(e.pointerId);
+  if (!g) return;
+  const { x, y } = toLocal(e);
+  const now = e.timeStamp;
+  const dt = (now - (g.t || now)) / 1000;
+  if (dt > 0.004) { // smoothed pointer velocity for natural throws
+    g.vx = lerp(g.vx || 0, (x - g.x) / dt, 0.5);
+    g.vy = lerp(g.vy || 0, (y - g.y) / dt, 0.5);
+    g.t = now;
+  }
+  g.x = x; g.y = y;
+});
+function release(e) {
+  const g = grabs.get(e.pointerId);
+  if (!g) return;
+  // hand the whole balloon the pointer's momentum for satisfying throws
+  if (balloons.includes(g.b)) {
+    const vx = clamp(g.vx || 0, -5200, 5200), vy = clamp(g.vy || 0, -5200, 5200);
+    for (const p of g.b.pts) { p.px = p.x - vx * DT; p.py = p.y - vy * DT; }
+    if (Math.hypot(vx, vy) > 1200) g.b.boostT = timeAlive + 1.0; // free-flight window
+  }
+  grabs.delete(e.pointerId);
+  if (grabs.size === 0) canvas.classList.remove('grabbing');
+}
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+resetBtn.addEventListener('click', () => { ensureAudio(); reset(); hintEl.textContent = HINT; hintEl.style.opacity = '0.8'; });
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') { reset(); hintEl.textContent = HINT; hintEl.style.opacity = '0.8'; }
+});
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  floorY = H - Math.max(46, H * 0.085);
+  for (const b of balloons) {
+    const c = b.centroid();
+    if (c.x > W - 10 || c.y > floorY - 10) {
+      for (const p of b.pts) { p.x = Math.min(p.x, W - 10); p.y = Math.min(p.y, floorY - 10); }
+    }
+  }
+}
+window.addEventListener('resize', resize);
+
+/* test hooks (harmless in production) */
+window.__test = {
+  count: () => balloons.length,
+  popped: () => poppedCount,
+  drops: () => drops.length,
+  lastReason: null,
+  centroids: () => balloons.map(b => { const c = b.centroid(); return { x: c.x, y: c.y, r: b.r }; }),
+  reset,
+};
+
+hintEl.textContent = HINT;
+resize();
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

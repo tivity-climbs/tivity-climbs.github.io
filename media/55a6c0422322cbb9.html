@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbit Courier</title>
+<style>
+  html, body { margin:0; height:100%; width:100%; background:#05070a; color:#eef2f7;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; overflow:hidden; }
+  canvas { display:block; width:100%; height:100%; }
+  #ui { position:absolute; inset:0; pointer-events:none; padding:22px; }
+  /* ---------- HUD ---------- */
+  .hud { pointer-events:auto; }
+  .top { display:flex; justify-content:space-between; align-items:flex-end; gap:10px; flex-wrap:wrap; }
+  h1 { font-size:20px; letter-spacing:2px; text-transform:uppercase; margin:0; color:#8ecae6; }
+  .panel { pointer-events:auto; }
+  .fuel-wrap { pointer-events:auto; display:flex; align-items:center; gap:8px; margin-top:6px; }
+  .fuel-label { font-size:12px; color:#9aa5b1; }
+  .fuel-bar { width:110px; height:10px; border:2px solid #333f4a; border-radius:5px; overflow:hidden; background:#0b1018; }
+  .fuel-fill { height:100%; background:#8ecae6; width:100%; transition:width 0.1s ease; }
+  .score { font-size:14px; color:#9aa5b1; line-height:1.4; }
+  .score b { color:#8ecae6; }
+  .objective { font-size:13px; color:#9aa5b1; line-height:1.5; max-width:330px; }
+  .controls { font-size:12px; color:#7a8795; line-height:1.5; margin-top:6px; }
+  .controls b { color:#eef2f7; }
+  /* ---------- overlays ---------- */
+  .overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(8,12,18,0.88); backdrop-filter:blur(6px); pointer-events:auto; z-index:10; }
+  .overlay.hidden { display:none; }
+  .overlay h2 { font-size:28px; margin:0 0 10px; color:#8ecae6; letter-spacing:1px; }
+  .overlay p { color:#9aa5b1; margin:0 0 18px; line-height:1.55; max-width:340px; text-align:center; }
+  button.restart { pointer-events:auto; background:#8ecae6; color:#05070a; border:none; padding:10px 24px;
+    font-size:15px; font-weight:bold; border-radius:6px; cursor:pointer; margin-top:8px; }
+  button.restart:hover { background:#fff; }
+  button.restart:active { transform:scale(0.96); }
+  /* ---------- start screen ---------- */
+  .start { pointer-events:auto; }
+  .start h1 { font-size:34px; margin:0 0 8px; letter-spacing:2px; }
+  .start .obj { font-size:15px; color:#9aa5b1; text-align:center; max-width:430px; line-height:1.5; margin-bottom:14px; }
+  .start .obj b { color:#eef2f7; }
+  .start .ctrls { font-size:13px; color:#7a8795; line-height:1.6; text-align:center; margin-bottom:16px; }
+  .start .ctrls b { color:#eef2f7; }
+  button.start { pointer-events:auto; background:#8ecae6; color:#05070a; border:none; padding:12px 30px;
+    font-size:16px; font-weight:bold; border-radius:6px; cursor:pointer; }
+  button.start:hover { background:#fff; }
+  button.start:active { transform:scale(0.96); }
+  /* ---------- hint ---------- */
+  .hint { pointer-events:none; position:absolute; bottom:24px; left:50%; transform:translateX(-50%);
+    color:#4a5568; font-size:12px; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="ui">
+  <div class="hud top">
+    <div class="panel">
+      <div class="objective" id="objective">Deliver packages between moons using planetary gravity.</div>
+      <div class="controls">
+        <b>Thrust:</b> hold mouse/touch or press W / &uarr;<br>
+        <b>Aim:</b> mouse pointer or rotate with A / D
+      </div>
+    </div>
+    <div class="panel">
+      <div class="score" id="score">Score: <b>0</b></div>
+      <div class="score" id="deliveries">Deliveries: <b>0</b> / <b id="targetN">5</b></div>
+    </div>
+  </div>
+  <div class="fuel-wrap">
+    <div class="fuel-label">FUEL</div>
+    <div class="fuel-bar"><div class="fuel-fill" id="fuelFill"></div></div>
+  </div>
+  <div class="overlay hidden" id="overlay">
+    <h2 id="overlayTitle">Mission Failed</h2>
+    <p id="overlayMsg">Crashed into the planet.</p>
+    <button class="restart" onclick="game.restart()">Restart</button>
+  </div>
+  <div class="overlay start" id="startScreen">
+    <h1>Orbit Courier</h1>
+    <div class="obj">Pilot your ship using the planet&rsquo;s gravity to deliver packages between moons.<br>
+      Reach <b id="startN">5</b> deliveries to win. Don&rsquo;t crash into the planet or drift away.</div>
+    <div class="ctrls">
+      Thrust: hold <b>mouse / touch</b> or press <b>W / &uarr;</b> &middot; Aim with <b>mouse</b> or rotate with <b>A / D</b>
+    </div>
+    <button class="start" onclick="game.start()">Begin Mission</button>
+  </div>
+  <div class="hint" id="hint"></div>
+</div>
+<script>
+/* =================== config =================== */
+const W = 800, H = 600;
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const dpr = Math.max(1, window.devicePixelRatio || 1);
+canvas.width = W * dpr;
+canvas.height = H * dpr;
+ctx.scale(dpr, dpr);
+const cx = W / 2, cy = H / 2;
+
+/* =================== input =================== */
+const keys = {};
+window.addEventListener('keydown', e => {
+  initAudio();
+  if (gameState === 'start') { e.preventDefault(); game.start(); return; }
+  keys[e.code] = true;
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+const pointer = { x: 0, y: 0, active: false };
+function toLogical(evt) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (evt.clientX - r.left) * W / r.width, y: (evt.clientY - r.top) * H / r.height };
+}
+canvas.addEventListener('pointerdown', e => { initAudio(); pointer.active = true; const p = toLogical(e); pointer.x = p.x; pointer.y = p.y; });
+canvas.addEventListener('pointermove', e => { if (pointer.active) { const p = toLogical(e); pointer.x = p.x; pointer.y = p.y; } });
+canvas.addEventListener('pointerup', e => { pointer.active = false; });
+canvas.addEventListener('pointercancel', e => { pointer.active = false; });
+canvas.style.touchAction = 'none';
+
+/* =================== audio (code-only, Web Audio API) =================== */
+let audioCtx;
+function initAudio() { if (!audioCtx) { try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { audioCtx = null; } } }
+function sFreq(o, f, t) { try { o.frequency.setValueAtTime(f, t); } catch (e) {} }
+function sFreqRamp(o, f, t) { try { o.frequency.exponentialRampToValueAtTime(f, t); } catch (e) {} }
+function sGain(g, v, t) { try { g.gain.setValueAtTime(v, t); } catch (e) {} }
+function sGainRamp(g, v, t) { try { g.gain.exponentialRampToValueAtTime(v, t); } catch (e) {} }
+function playSound(kind) {
+  try {
+    if (!audioCtx) return;
+    const t = audioCtx.currentTime;
+    if (kind === 'thrust') {
+      const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+      sFreq(o, 140, t); sFreqRamp(o, 100, t + 0.15);
+      sGain(g, 0.018, t); sGainRamp(g, 0.001, t + 0.15);
+      o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t + 0.15);
+    } else if (kind === 'deliver') {
+      for (let i = 0; i < 2; i++) {
+        const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+        const f = 440 + i * 90;
+        o.type = 'square';
+        sFreq(o, f, t); sGain(g, 0.05, t); sGainRamp(g, 0.001, t + 0.12);
+        o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t + 0.12);
+      }
+    } else if (kind === 'crash') {
+      const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+      sFreq(o, 70, t); sFreqRamp(o, 18, t + 0.6);
+      sGain(g, 0.05, t); sGainRamp(g, 0.001, t + 0.6);
+      o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t + 0.6);
+    } else if (kind === 'win') {
+      const notes = [260, 329, 392, 523];
+      for (let i = 0; i < notes.length; i++) {
+        const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+        o.type = 'sine';
+        sFreq(o, notes[i], t + i * 0.13);
+        sGain(g, 0.05, t + i * 0.13);
+        sGainRamp(g, 0.001, t + i * 0.13 + 0.14);
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start(t + i * 0.13); o.stop(t + i * 0.13 + 0.2);
+      }
+    }
+  } catch (e) {}
+}
+let thrustOsc = null, thrustGain = null;
+function setThrust(on) {
+  try {
+    if (on && !thrustOsc && ship.fuel > 0 && audioCtx) {
+      thrustOsc = audioCtx.createOscillator();
+      thrustGain = audioCtx.createGain();
+      sFreq(thrustOsc, 120, audioCtx.currentTime);
+      thrustOsc.type = 'sawtooth';
+      sGain(thrustGain, 0.012, audioCtx.currentTime);
+      thrustOsc.connect(thrustGain); thrustGain.connect(audioCtx.destination);
+      thrustOsc.start();
+    } else if (!on && thrustOsc) {
+      thrustOsc.stop(audioCtx.currentTime + 0.12);
+      thrustOsc.disconnect();
+      thrustOsc = null; thrustGain = null;
+    }
+  } catch (e) {}
+}
+
+/* =================== world =================== */
+let gameState = 'start'; // start | playing | over | win
+let deliveries = 0;
+let score = 0;
+let targetMoon = 1;
+let canInteract = false;
+let fuelHint = 0;
+const N_DELIVERIES = 5;
+
+const ship = { x: cx, y: cy, vx: 0, vy: 0, angle: 0, radius: 6, fuel: 100, maxFuel: 100, thrusting: false, carrying: true };
+const planet = { x: cx, y: cy, radius: 70, mass: 340 };
+const kPlanet = 340;
+const kMoon = 2;
+const thrustAcc = 0.05;     // acceleration per physics step
+const fuelConsume = 0.10;   // fuel per physics step when thrusting
+const fuelRegen = 0.02;     // fuel per physics step when coasting
+const drag = 0.999;
+
+const moons = [
+  { radius: 26, orbitR: 140, angle: 0, speed: 0.0022, mass: 11, color: '#8ecae6', hasPackage: false },
+  { radius: 22, orbitR: 210, angle: 2.3, speed: -0.0016, mass: 10, color: '#ff9f1c', hasPackage: false },
+  { radius: 28, orbitR: 290, angle: 4.1, speed: 0.0012, mass: 13, color: '#e28484', hasPackage: false },
+  { radius: 30, orbitR: 370, angle: 1.6, speed: -0.0009, mass: 15, color: '#48d1b0', hasPackage: false },
+];
+moons.forEach(m => {
+  m.x = cx + m.orbitR * Math.cos(m.angle);
+  m.y = cy + m.orbitR * Math.sin(m.angle);
+});
+
+// stars
+const stars = [];
+for (let i = 0; i < 300; i++) stars.push({ x: Math.random() * W, y: Math.random() * H, s: Math.random() * 1.5 });
+
+// fixed planet craters
+const craters = [];
+for (let i = 0; i < 14; i++) {
+  const a = Math.random() * Math.PI * 2, r = Math.random() * 45 + 8;
+  craters.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, s: Math.random() * 5 + 2 });
+}
+
+const trail = [];
+
+/* =================== helpers =================== */
+function resetShipAt(moonIndex) {
+  const m = moons[moonIndex];
+  // spawn just outside the moon's surface, on the side facing away from the planet
+  const away = Math.atan2(m.y - planet.y, m.x - planet.x);
+  const offset = m.radius + ship.radius + 4;
+  ship.x = m.x + Math.cos(away) * offset;
+  ship.y = m.y + Math.sin(away) * offset;
+  // give the ship a tangential circular-orbit velocity around the planet so it
+  // stays in orbit instead of falling straight into the gravity well and being
+  // flung out of bounds on the first pass
+  const dx = ship.x - planet.x;
+  const dy = ship.y - planet.y;
+  const r = Math.hypot(dx, dy);
+  const orbSpeed = Math.sqrt(kPlanet / r); // per physics step
+  const tx = -dy / r;
+  const ty = dx / r;
+  ship.vx = tx * orbSpeed;
+  ship.vy = ty * orbSpeed;
+  ship.angle = away;
+  ship.fuel = ship.maxFuel;
+  ship.thrusting = false;
+  ship.carrying = true;
+}
+
+function chooseTarget(current) {
+  let i;
+  do { i = Math.floor(Math.random() * moons.length); } while (i === current);
+  return i;
+}
+
+function updateHud() {
+  document.getElementById('score').textContent = 'Score: <b>' + score + '</b>';
+  document.getElementById('deliveries').textContent = 'Deliveries: <b>' + deliveries + '</b> / <b>' + N_DELIVERIES + '</b>';
+  const fill = document.getElementById('fuelFill');
+  fill.style.width = (ship.fuel / ship.maxFuel * 100) + '%';
+  fill.style.background = ship.fuel < 30 ? '#ff9f1c' : '#8ecae6';
+}
+
+function showHint(txt) {
+  const el = document.getElementById('hint');
+  el.textContent = txt;
+  if (txt) { setTimeout(() => { el.textContent = ''; }, 5000); }
+}
+
+/* =================== game flow =================== */
+function startGame() {
+  gameState = 'playing';
+  deliveries = 0; score = 0;
+  document.getElementById('startScreen').classList.add('hidden');
+  document.getElementById('overlay').classList.add('hidden');
+  initAudio();
+  // randomize moon positions for variety
+  moons.forEach((m, i) => {
+    m.angle = Math.random() * Math.PI * 2;
+    m.x = cx + m.orbitR * Math.cos(m.angle);
+    m.y = cy + m.orbitR * Math.sin(m.angle);
+  });
+  const startMoon = Math.floor(Math.random() * moons.length);
+  resetShipAt(startMoon);
+  targetMoon = chooseTarget(startMoon);
+  moons[startMoon].hasPackage = true;
+  ship.carrying = true;
+  canInteract = false;
+  trail.length = 0;
+  updateHud();
+  showHint('');
+}
+
+function gameOver(reason) {
+  gameState = 'over';
+  setThrust(false);
+  const title = reason === 'crash' ? 'Crashed!' : 'Drifted Away';
+  const msg = reason === 'crash'
+    ? 'You hit the planet. Use gravity slingshots and short thrust bursts to survive.'
+    : 'You drifted too far into the void.';
+  document.getElementById('overlayTitle').textContent = title;
+  document.getElementById('overlayMsg').textContent = msg;
+  document.getElementById('overlay').classList.remove('hidden');
+  playSound(reason === 'crash' ? 'crash' : 'crash');
+}
+
+window.game = {
+  start: startGame,
+  restart: function () { startGame(); }
+};
+
+/* =================== input update =================== */
+function updateInput() {
+  ship.thrusting = false;
+  if (pointer.active) {
+    // aim at pointer and thrust toward it
+    ship.angle = Math.atan2(pointer.y - ship.y, pointer.x - ship.x);
+    ship.thrusting = true;
+  } else {
+    if (keys['ArrowUp'] || keys['KeyW'] || keys['Space']) ship.thrusting = true;
+    if (keys['ArrowLeft'] || keys['KeyA']) ship.angle -= 0.04;
+    if (keys['ArrowRight'] || keys['KeyD']) ship.angle += 0.04;
+  }
+  // no thrust without fuel
+  if (ship.thrusting && ship.fuel <= 0) ship.thrusting = false;
+}
+
+/* =================== physics =================== */
+const DT = 1 / 60;
+const MAX_STEPS = 8;
+let acc = 0;
+let lastTime = 0;
+
+function applyGravity(body, k) {
+  const dx = body.x - ship.x;
+  const dy = body.y - ship.y;
+  const r2 = dx * dx + dy * dy;
+  if (r2 === 0) return;
+  const r = Math.sqrt(r2);
+  // soften gravity at very short range to avoid singularities when the ship
+  // starts on top of a moon or passes extremely close to a body
+  const rSoft = Math.max(r, 1.0);
+  const mag = k / (rSoft * rSoft);
+  const dirX = dx / r;
+  const dirY = dy / r;
+  ship.vx += mag * dirX;
+  ship.vy += mag * dirY;
+}
+
+function updatePhysics(dt) {
+  // planet gravity
+  applyGravity(planet, kPlanet);
+  // moon gravity
+  for (let m of moons) {
+    applyGravity(m, kMoon);
+  }
+  // thrust
+  if (ship.thrusting && ship.fuel > 0) {
+    ship.vx += Math.cos(ship.angle) * thrustAcc;
+    ship.vy += Math.sin(ship.angle) * thrustAcc;
+    ship.fuel -= fuelConsume;
+    if (ship.fuel < 0) ship.fuel = 0;
+  } else if (!ship.thrusting) {
+    ship.fuel += fuelRegen;
+    if (ship.fuel > ship.maxFuel) ship.fuel = ship.maxFuel;
+  }
+  // drag
+  ship.vx *= drag;
+  ship.vy *= drag;
+  // integrate position
+  ship.x += ship.vx;
+  ship.y += ship.vy;
+  // trail
+  trail.push({ x: ship.x, y: ship.y });
+  if (trail.length > 24) trail.shift();
+  // crash: hit planet
+  const d2 = (ship.x - planet.x) ** 2 + (ship.y - planet.y) ** 2;
+  if (d2 < (planet.radius + ship.radius) ** 2) { gameOver('crash'); return; }
+  // crash: drift too far
+  if (d2 > 520 * 520) { gameOver('drift'); return; }
+  // low fuel hint
+  if (ship.thrusting && ship.fuel === 0) {
+    fuelHint++;
+    if (fuelHint > 40) { showHint('Fuel depleted &mdash; coast and let gravity guide you, then wait for it to recharge.'); fuelHint = 0; }
+  }
+}
+
+function updateInteraction() {
+  // is the ship within capture range of any moon?
+  let near = false;
+  for (let m of moons) {
+    if (Math.hypot(ship.x - m.x, ship.y - m.y) < m.radius + 14) { near = true; break; }
+  }
+  if (!near) { canInteract = true; return; }
+  if (!canInteract) return;
+  // interact with the nearest moon in capture range
+  let nearest = null, nearestD = 1e9;
+  for (let m of moons) {
+    const d = Math.hypot(ship.x - m.x, ship.y - m.y);
+    if (d < m.radius + 14 && d < nearestD) { nearestD = d; nearest = m; }
+  }
+  if (nearest) {
+    const i = moons.indexOf(nearest);
+    if (i === targetMoon) {
+      // DELIVER
+      ship.carrying = false;
+      score += 10;
+      deliveries++;
+      nearest.hasPackage = true;
+      playSound('deliver');
+      updateHud();
+      if (deliveries >= N_DELIVERIES) {
+        gameState = 'win';
+        setThrust(false);
+        document.getElementById('overlayTitle').textContent = 'Mission Complete';
+        document.getElementById('overlayMsg').textContent = 'You delivered ' + deliveries + ' packages to win!';
+        document.getElementById('overlay').classList.remove('hidden');
+        playSound('win');
+      } else {
+        // reload and pick a new target
+        ship.carrying = true;
+        targetMoon = chooseTarget(i);
+        updateHud();
+      }
+    }
+    // landing on a non-target moon: nothing happens (just a fly-by)
+  }
+  canInteract = false; // require leaving the moon before interacting again
+}
+
+/* =================== render =================== */
+function drawShip() {
+  const a = ship.angle;
+  const len = 14, w = 8;
+  ctx.save();
+  ctx.translate(ship.x, ship.y);
+  ctx.rotate(a);
+  // body
+  ctx.fillStyle = '#b9f0ff';
+  ctx.beginPath();
+  ctx.moveTo(len, 0);
+  ctx.lineTo(-len * 0.6, w * 0.6);
+  ctx.lineTo(-len * 0.6, -w * 0.6);
+  ctx.closePath();
+  ctx.fill();
+  // cockpit
+  ctx.fillStyle = '#0b1018';
+  ctx.fillRect(len * 0.35, -3, 6, 6);
+  // package on ship
+  if (ship.carrying) {
+    ctx.fillStyle = '#f1c40f';
+    ctx.fillRect(-len * 0.55, -4, 7, 7);
+    ctx.fillStyle = '#b98a00';
+    ctx.fillRect(-len * 0.55 + 1, -3, 5, 5);
+  }
+  // thruster flame
+  if (ship.thrusting) {
+    ctx.fillStyle = 'rgba(255,255,200,0.95)';
+    ctx.beginPath();
+    ctx.moveTo(-len * 0.6 - 5, 0);
+    ctx.lineTo(-len * 0.6 - 15, w * 0.7);
+    ctx.lineTo(-len * 0.6 - 15, -w * 0.7);
+    ctx.closePath();
+    ctx.fill();
+    // flame particles
+    for (let i = 0; i < 3; i++) {
+      const px = -len * 0.6 - 5 - Math.random() * 6;
+      const py = (Math.random() - 0.5) * w * 1.2;
+      ctx.fillStyle = 'rgba(255,255,200,0.5)';
+      ctx.beginPath(); ctx.arc(px, py, 1.5, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+function draw() {
+  // background
+  ctx.fillStyle = '#080c12';
+  ctx.fillRect(0, 0, W, H);
+  // stars (twinkle)
+  const time = Date.now() * 0.002;
+  for (let s of stars) {
+    const o = 0.35 + 0.55 * Math.sin(time + s.x * 0.013 + s.y * 0.017);
+    ctx.fillStyle = 'rgba(238,242,247,' + o + ')';
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.s, 0, Math.PI * 2); ctx.fill();
+  }
+  // orbit lines
+  for (let m of moons) {
+    ctx.strokeStyle = 'rgba(142,202,230,0.10)';
+    ctx.beginPath(); ctx.arc(cx, cy, m.orbitR, 0, Math.PI * 2); ctx.stroke();
+  }
+  // planet glow
+  ctx.fillStyle = 'rgba(44,62,80,0.30)';
+  ctx.beginPath(); ctx.arc(cx, cy, planet.radius + 44, 0, Math.PI * 2); ctx.fill();
+  // planet body
+  ctx.fillStyle = '#2c3e50';
+  ctx.beginPath(); ctx.arc(cx, cy, planet.radius, 0, Math.PI * 2); ctx.fill();
+  // planet shade
+  ctx.fillStyle = 'rgba(0,0,0,0.40)';
+  ctx.beginPath(); ctx.arc(cx + 16, cy - 12, planet.radius, 0, Math.PI * 2); ctx.fill();
+  // craters
+  for (let c of craters) {
+    ctx.fillStyle = 'rgba(0,0,0,0.50)';
+    ctx.beginPath(); ctx.arc(c.x, c.y, c.s, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.beginPath(); ctx.arc(c.x + 2, c.y - 2, c.s * 0.45, 0, Math.PI * 2); ctx.fill();
+  }
+  // moons
+  for (let m of moons) {
+    // glow
+    ctx.fillStyle = m.color + '0.35';
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.radius + 10, 0, Math.PI * 2); ctx.fill();
+    // body
+    ctx.fillStyle = m.color;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.radius, 0, Math.PI * 2); ctx.fill();
+    // highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.40)';
+    ctx.beginPath(); ctx.arc(m.x - m.radius * 0.25, m.y - m.radius * 0.25, m.radius * 0.35, 0, Math.PI * 2); ctx.fill();
+    // package sitting on moon
+    if (m.hasPackage) {
+      ctx.fillStyle = '#f1c40f';
+      ctx.beginPath(); ctx.arc(m.x, m.y - m.radius - 6, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#b98a00';
+      ctx.fillRect(m.x - 3, m.y - m.radius - 10, 6, 6);
+    }
+  }
+  // target marker
+  if (gameState === 'playing') {
+    const tm = moons[targetMoon];
+    const pulse = 0.8 + 0.5 * Math.sin(Date.now() * 0.006);
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(tm.x, tm.y, tm.radius + 12 + pulse * 7, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('TARGET', tm.x, tm.y - tm.radius - 16);
+  }
+  // ship trail
+  for (let i = 0; i < trail.length; i++) {
+    const a = i / trail.length;
+    ctx.strokeStyle = 'rgba(185,240,255,' + (0.12 * a) + ')';
+    ctx.lineWidth = 1.5 * (1 - a);
+    if (i > 0) {
+      const p0 = trail[i - 1], p1 = trail[i];
+      ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+    }
+  }
+  // ship
+  drawShip();
+}
+
+function loop(t) {
+  if (!lastTime) lastTime = t;
+  let frameTime = t - lastTime;
+  lastTime = t;
+  if (frameTime > 0.25) frameTime = 0.25;
+  acc += frameTime;
+
+  if (gameState === 'playing') {
+    updateInput();
+    setThrust(ship.thrusting);
+    let steps = 0;
+    while (acc >= DT && steps < MAX_STEPS) {
+      updatePhysics(DT);
+      acc -= DT;
+      steps++;
+    }
+    if (acc > DT * MAX_STEPS) acc = DT * MAX_STEPS;
+    updateInteraction();
+  } else {
+    setThrust(false);
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
